@@ -1,0 +1,13 @@
+[package]
+name = "git-vacuum-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+git-vacuum-core = { path = "../git-vacuum-core" }
+git-vacuum-app = { path = "../git-vacuum-app" }
+ratatui = "0.29"
+crossterm = "0.28"
+unicode-width = "0.2"
+log.workspace = true

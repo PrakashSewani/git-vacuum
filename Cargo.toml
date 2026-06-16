@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/git-vacuum-core",
+    "crates/git-vacuum-db",
+    "crates/git-vacuum-github",
+    "crates/git-vacuum-git",
+    "crates/git-vacuum-keyring",
+    "crates/git-vacuum-service",
+    "crates/git-vacuum-app",
+    "crates/git-vacuum-tui",
+    "crates/git-vacuum",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/PrakashSewani/git-vacuum"
+rust-version = "1.85"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["sync"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+log = "0.4"

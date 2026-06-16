@@ -1,0 +1,15 @@
+[package]
+name = "git-vacuum-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+git-vacuum-core = { path = "../git-vacuum-core" }
+git2 = "0.19"
+tokio.workspace = true
+log.workspace = true
+thiserror.workspace = true
+
+async-trait = "0.1"
+
