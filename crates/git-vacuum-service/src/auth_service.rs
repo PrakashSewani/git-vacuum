@@ -1,103 +1,65 @@
 use std::sync::Arc;
 
-use git_vacuum_core::AppEvent;
-use git_vacuum_core::traits::{Database, GithubApi, KeyringStore};
-use tokio::sync::mpsc;
+use git_vacuum_core::{AuthError, KeyringError, UserInfo};
 
+use crate::Services;
+
+/// Validate a PAT against GitHub, then persist it to the OS keyring
+/// and upsert the account metadata in the database.
+/// Token goes to keyring ONLY (never to SQLite, never logged).
 pub async fn authenticate_pat(
-    token: String,
-    github: Arc<dyn GithubApi>,
-    db: Arc<dyn Database>,
-    keyring: Arc<dyn KeyringStore>,
-    app_tx: mpsc::UnboundedSender<AppEvent>,
-) {
-    log::info!("Authenticating PAT token (length: {})", token.len());
-    github.set_token(&token).await;
-    log::info!("Token set on GitHub client, validating...");
+    services: Arc<Services>,
+    token: &str,
+) -> Result<UserInfo, AuthError> {
+    if token.is_empty() {
+        return Err(AuthError::InvalidToken);
+    }
+    services.github.set_token(token);
+    let info = services.github.validate_token().await?;
+    services
+        .keyring
+        .set_token(token)
+        .map_err(map_keyring_error)?;
+    services
+        .db
+        .upsert_account(&info)
+        .map_err(|e| AuthError::Internal(format!("db upsert: {e}")))?;
+    Ok(info)
+}
 
-    match github.validate_token().await {
-        Ok(user) => {
-            log::info!("Token validated successfully for user: {}", user.login);
-            let _ = keyring.set_token("git-vacuum", "github", &token).await;
-            if let Err(e) = db.upsert_account(&user).await {
-                log::warn!("Failed to save account info: {}", e);
-            }
-            let _ = app_tx.send(AppEvent::AuthSucceeded {
-                username: user.login.clone(),
-                scopes: user.scopes.clone(),
-                token_expires: user.token_expires_at,
-            });
+/// Load the stored token from the keyring, validate it, and return the user info.
+/// On 401, clear the keyring entry and return InvalidToken.
+pub async fn load_stored_credentials(
+    services: Arc<Services>,
+) -> Result<Option<UserInfo>, AuthError> {
+    let token = match services.keyring.get_token() {
+        Ok(Some(t)) => t,
+        Ok(None) => return Ok(None),
+        Err(KeyringError::NoEntry) => return Ok(None),
+        Err(e) => return Err(AuthError::Internal(format!("keyring: {e}"))),
+    };
+    services.github.set_token(&token);
+    match services.github.validate_token().await {
+        Ok(info) => {
+            let _ = services.db.upsert_account(&info);
+            Ok(Some(info))
         }
-        Err(e) => {
-            log::error!("Token validation failed: {}", e);
-            let _ = app_tx.send(AppEvent::AuthFailed {
-                reason: "invalid_token".to_string(),
-                detail: e,
-            });
+        Err(AuthError::InvalidToken) | Err(AuthError::ExpiredToken) => {
+            let _ = services.keyring.delete_token();
+            let _ = services.db.clear_active_account();
+            Err(AuthError::InvalidToken)
         }
+        Err(e) => Err(e),
     }
 }
 
-pub async fn device_flow_init(
-    client_id: String,
-    scopes: Vec<String>,
-    github: Arc<dyn GithubApi>,
-    app_tx: mpsc::UnboundedSender<AppEvent>,
-) -> Result<String, String> {
-    let scope_refs: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
-    let init = github.device_flow_init(&client_id, &scope_refs).await?;
-    let _ = app_tx.send(AppEvent::OAuthCodeReceived {
-        user_code: init.user_code.clone(),
-        verification_uri: init.verification_uri.clone(),
-        expires_in: init.expires_in,
-    });
-    Ok(init.device_code)
+pub async fn logout(services: Arc<Services>) -> Result<(), KeyringError> {
+    services.github.clear_token();
+    services.keyring.delete_token()?;
+    let _ = services.db.clear_active_account();
+    Ok(())
 }
 
-pub async fn poll_oauth_token(
-    client_id: String,
-    device_code: String,
-    interval: std::time::Duration,
-    github: Arc<dyn GithubApi>,
-    _db: Arc<dyn Database>,
-    keyring: Arc<dyn KeyringStore>,
-    app_tx: mpsc::UnboundedSender<AppEvent>,
-    cancel_rx: tokio::sync::watch::Receiver<bool>,
-) {
-    loop {
-        if *cancel_rx.borrow() { break; }
-        match github.device_flow_poll(&client_id, &device_code).await {
-            Ok(git_vacuum_core::DeviceFlowPoll::Success { access_token, .. }) => {
-                let _ = keyring.set_token("git-vacuum", "github", &access_token).await;
-                let _ = app_tx.send(AppEvent::AuthSucceeded {
-                    username: access_token, scopes: vec![], token_expires: None,
-                });
-                break;
-            }
-            Ok(git_vacuum_core::DeviceFlowPoll::Pending) => {
-                tokio::time::sleep(interval).await;
-            }
-            Ok(git_vacuum_core::DeviceFlowPoll::SlowDown { new_interval }) => {
-                tokio::time::sleep(new_interval).await;
-            }
-            Ok(git_vacuum_core::DeviceFlowPoll::Expired) => {
-                let _ = app_tx.send(AppEvent::OAuthTimeout);
-                break;
-            }
-            Ok(git_vacuum_core::DeviceFlowPoll::AccessDenied) => {
-                let _ = app_tx.send(AppEvent::AuthFailed {
-                    reason: "access_denied".to_string(),
-                    detail: "User denied access".to_string(),
-                });
-                break;
-            }
-            Err(e) => {
-                let _ = app_tx.send(AppEvent::AuthFailed {
-                    reason: "oauth_error".to_string(),
-                    detail: e,
-                });
-                break;
-            }
-        }
-    }
+fn map_keyring_error(e: KeyringError) -> AuthError {
+    AuthError::Internal(format!("keyring: {e}"))
 }

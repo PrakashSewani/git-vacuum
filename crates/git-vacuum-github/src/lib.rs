@@ -1,207 +1,221 @@
-use std::sync::Mutex;
+pub mod error;
+pub mod mapping;
+
+use async_trait::async_trait;
+use chrono::Utc;
+use git_vacuum_core::{
+    AuthError, DeviceFlowInit, DeviceFlowPoll, DiscoveryError, GithubApi, OrgInfo, RateLimitStatus,
+    RemoteRepo, UserInfo,
+};
 use octocrab::Octocrab;
-use git_vacuum_core::traits::github_api::GithubApi;
+use parking_lot::Mutex;
+
+use crate::error::{map_auth_error, map_discovery_error};
+use crate::mapping::parse_user;
 
 pub struct OctocrabGithubApi {
-    client: Mutex<Octocrab>,
+    base_url: String,
+    user_agent: String,
+    token: Mutex<Option<String>>,
+    client: Mutex<Option<Octocrab>>,
 }
 
 impl OctocrabGithubApi {
-    pub fn new(base_url: Option<String>, _user_agent: String) -> Result<Self, String> {
-        let mut builder = Octocrab::builder();
-        if let Some(url) = base_url {
-            builder = builder.base_uri(url).map_err(|e| format!("Invalid base URL: {}", e))?;
+    pub fn new(base_url: impl Into<String>, user_agent: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            user_agent: user_agent.into(),
+            token: Mutex::new(None),
+            client: Mutex::new(None),
         }
-        let client = builder.build().map_err(|e| format!("Failed to build client: {}", e))?;
-        Ok(Self { client: Mutex::new(client) })
     }
 
-    fn map_repo(repo: octocrab::models::Repository) -> git_vacuum_core::RemoteRepo {
-        use git_vacuum_core::{RemoteRepo, RepoVisibility};
-        let owner_type = repo.owner.as_ref().map(|o| o.r#type == "Organization").unwrap_or(false);
-        RemoteRepo {
-            github_id: repo.id.into_inner() as i64,
-            owner_login: repo.owner.as_ref().map(|o| o.login.clone()).unwrap_or_default(),
-            name: repo.name,
-            full_name: repo.full_name.unwrap_or_default(),
-            description: repo.description,
-            language: repo.language.map(|l| l.to_string()),
-            default_branch: repo.default_branch.unwrap_or_else(|| "main".to_string()),
-            visibility: match repo.visibility.as_deref() {
-                Some("private") => RepoVisibility::Private,
-                Some("internal") => RepoVisibility::Internal,
-                _ => RepoVisibility::Public,
-            },
-            is_fork: repo.fork.unwrap_or(false),
-            is_archived: repo.archived.unwrap_or(false),
-            is_template: repo.is_template.unwrap_or(false),
-            size_kb: repo.size.map(|s| s as i64),
-            stars: repo.stargazers_count.unwrap_or(0) as i32,
-            open_issues: repo.open_issues_count.unwrap_or(0) as i32,
-            license_spdx: repo.license.and_then(|l| Some(l.spdx_id)),
-            topics: repo.topics.unwrap_or_default(),
-            clone_url_ssh: repo.ssh_url,
-            clone_url_https: repo.clone_url.as_ref().map(|u| u.to_string()).unwrap_or_default(),
-            homepage_url: repo.homepage.as_ref().map(|u| u.to_string()),
-            pushed_at: repo.pushed_at,
-            created_at: repo.created_at,
-            updated_at: repo.updated_at,
-            owner_is_org: owner_type,
+    fn unauth_client(&self) -> Result<Octocrab, AuthError> {
+        if let Some(c) = self.client.lock().clone() {
+            return Ok(c);
         }
+        let crab = Octocrab::builder()
+            .base_uri(self.base_url.as_str())
+            .map_err(|e| AuthError::Internal(format!("invalid base uri: {e}")))?
+            .add_header(http::HeaderName::from_static("user-agent"), self.user_agent.clone())
+            .build()
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        *self.client.lock() = Some(crab.clone());
+        Ok(crab)
+    }
+
+    fn auth_client(&self) -> Result<Octocrab, AuthError> {
+        let token = self.token.lock().clone();
+        let token = token.ok_or(AuthError::InvalidToken)?;
+        Ok(Octocrab::builder()
+            .base_uri(self.base_url.as_str())
+            .map_err(|e| AuthError::Internal(format!("invalid base uri: {e}")))?
+            .add_header(http::HeaderName::from_static("user-agent"), self.user_agent.clone())
+            .personal_token(token)
+            .build()
+            .map_err(|e| AuthError::Internal(e.to_string()))?)
     }
 }
 
-#[async_trait::async_trait]
+fn auth_to_discovery(e: AuthError) -> DiscoveryError {
+    match e {
+        AuthError::InvalidToken => DiscoveryError::Auth("invalid token".into()),
+        AuthError::Network(s) => DiscoveryError::Network(s),
+        other => DiscoveryError::Internal(other.to_string()),
+    }
+}
+
+#[async_trait]
 impl GithubApi for OctocrabGithubApi {
-    async fn set_token(&self, token: &str) {
-        let new_client = Octocrab::builder()
-            .personal_token(token.to_string())
-            .build()
-            .unwrap_or_else(|e| {
-                log::error!("Failed to build authenticated Octocrab client: {}", e);
-                panic!("Cannot create authenticated client: {}", e);
-            });
-        let mut guard = self.client.lock().unwrap();
-        *guard = new_client;
+    fn set_token(&self, token: &str) {
+        *self.token.lock() = Some(token.to_string());
+        *self.client.lock() = None;
     }
 
-    async fn validate_token(&self) -> Result<git_vacuum_core::UserInfo, String> {
-        let client = self.client.lock().unwrap().clone();
-        let user: octocrab::models::Author = client
-            .get("/user", None::<&()>)
-            .await
-            .map_err(|e| format!("Token validation failed: {}", e))?;
-
-        Ok(git_vacuum_core::UserInfo {
-            github_user_id: user.id.into_inner() as i64,
-            login: user.login,
-            display_name: None,
-            email: user.email,
-            avatar_url: Some(user.avatar_url.to_string()),
-            scopes: vec![],
-            token_expires_at: None,
-        })
+    fn clear_token(&self) {
+        *self.token.lock() = None;
+        *self.client.lock() = None;
     }
 
-    async fn get_authenticated_user(&self) -> Result<git_vacuum_core::UserInfo, String> {
+    async fn validate_token(&self) -> Result<UserInfo, AuthError> {
+        let crab = self.auth_client()?;
+        let user = crab.current().user().await.map_err(map_auth_error)?;
+        Ok(parse_user(user, vec![], None))
+    }
+
+    async fn get_authenticated_user(&self) -> Result<UserInfo, AuthError> {
         self.validate_token().await
+    }
+
+    async fn list_my_repos(&self) -> Result<Vec<RemoteRepo>, DiscoveryError> {
+        let crab = self.auth_client().map_err(auth_to_discovery)?;
+        let url = format!("{}/user/repos?per_page=100&affiliation=owner,collaborator,organization_member", self.base_url);
+        let page: Vec<octocrab::models::Repository> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
+        Ok(page.into_iter().map(mapping::map_repo).collect())
+    }
+
+    async fn list_org_repos(&self, org: &str) -> Result<Vec<RemoteRepo>, DiscoveryError> {
+        let crab = self.auth_client().map_err(auth_to_discovery)?;
+        let url = format!("{}/orgs/{}/repos?per_page=100&type=all&sort=updated", self.base_url, org);
+        let page: Vec<octocrab::models::Repository> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
+        Ok(page.into_iter().map(mapping::map_repo).collect())
+    }
+
+    async fn list_starred_repos(&self) -> Result<Vec<RemoteRepo>, DiscoveryError> {
+        let crab = self.auth_client().map_err(auth_to_discovery)?;
+        let url = format!("{}/user/starred?per_page=100&sort=created", self.base_url);
+        let page: Vec<octocrab::models::Repository> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
+        Ok(page.into_iter().map(mapping::map_repo).collect())
+    }
+
+    async fn list_all_accessible_repos(&self) -> Result<Vec<RemoteRepo>, DiscoveryError> {
+        let mut all = self.list_my_repos().await?;
+        let orgs = self.list_my_orgs().await?;
+        for org in orgs {
+            let mut org_repos = self.list_org_repos(&org.login).await?;
+            all.append(&mut org_repos);
+        }
+        all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        all.dedup_by_key(|r| r.github_id);
+        Ok(all)
+    }
+
+    async fn list_my_orgs(&self) -> Result<Vec<OrgInfo>, DiscoveryError> {
+        let crab = self.auth_client().map_err(auth_to_discovery)?;
+        let url = format!("{}/user/orgs?per_page=100", self.base_url);
+        let page: Vec<octocrab::models::orgs::Organization> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
+        Ok(page.into_iter().map(|o| OrgInfo {
+            github_org_id: o.id.0 as i64,
+            login: o.login,
+            display_name: o.name,
+            description: o.description,
+            avatar_url: Some(o.avatar_url.to_string()),
+            repos_count: o.public_repos.map(|c| c as i32).unwrap_or(0),
+        }).collect())
     }
 
     async fn device_flow_init(
         &self,
         client_id: &str,
         scopes: &[&str],
-    ) -> Result<git_vacuum_core::DeviceFlowInit, String> {
-        #[derive(serde::Serialize)]
-        struct DeviceCodeRequest { client_id: String, scope: String }
-        #[derive(serde::Deserialize)]
-        struct DeviceCodeResponse {
-            device_code: String, user_code: String,
-            verification_uri: String, expires_in: u64, interval: u64,
-        }
-        let req = DeviceCodeRequest { client_id: client_id.to_string(), scope: scopes.join(" ") };
-        let client = self.client.lock().unwrap().clone();
-        let resp: DeviceCodeResponse = client
-            .post("https://github.com/login/device/code", Some(&req))
+    ) -> Result<DeviceFlowInit, AuthError> {
+        let client = reqwest::Client::new();
+        let scope = scopes.join(" ");
+        let res = client
+            .post(format!("{}/login/device/code", self.base_url))
+            .header("Accept", "application/json")
+            .header("User-Agent", &self.user_agent)
+            .form(&[("client_id", client_id), ("scope", &scope)])
+            .send()
             .await
-            .map_err(|e| format!("Device flow init failed: {}", e))?;
-        Ok(git_vacuum_core::DeviceFlowInit {
-            device_code: resp.device_code, user_code: resp.user_code,
-            verification_uri: resp.verification_uri,
-            expires_in: std::time::Duration::from_secs(resp.expires_in),
-            interval: std::time::Duration::from_secs(resp.interval),
+            .map_err(|e| AuthError::Network(e.to_string()))?;
+        let body: serde_json::Value = res
+            .json()
+            .await
+            .map_err(|e| AuthError::Internal(format!("json: {e}")))?;
+        Ok(DeviceFlowInit {
+            device_code: body["device_code"].as_str().unwrap_or_default().to_string(),
+            user_code: body["user_code"].as_str().unwrap_or_default().to_string(),
+            verification_uri: body["verification_uri"].as_str().unwrap_or("https://github.com/login/device".into()).to_string(),
+            expires_in: std::time::Duration::from_secs(body["expires_in"].as_u64().unwrap_or(900)),
+            interval: std::time::Duration::from_secs(body["interval"].as_u64().unwrap_or(5)),
         })
     }
 
     async fn device_flow_poll(
-        &self, client_id: &str, device_code: &str,
-    ) -> Result<git_vacuum_core::DeviceFlowPoll, String> {
-        #[derive(serde::Serialize)]
-        struct PollRequest { client_id: String, device_code: String, grant_type: String }
-        #[derive(serde::Deserialize)]
-        struct PollResponse {
-            #[serde(default)] access_token: Option<String>,
-            #[serde(default)] error: Option<String>,
-            #[serde(default)] interval: Option<u64>,
-        }
-        let req = PollRequest {
-            client_id: client_id.to_string(), device_code: device_code.to_string(),
-            grant_type: "urn:ietf:params:oauth:grant-type:device_code".to_string(),
-        };
-        let client = self.client.lock().unwrap().clone();
-        let resp: PollResponse = client
-            .post("https://github.com/login/oauth/access_token", Some(&req))
+        &self,
+        client_id: &str,
+        device_code: &str,
+    ) -> Result<DeviceFlowPoll, AuthError> {
+        let client = reqwest::Client::new();
+        let res = client
+            .post(format!("{}/login/oauth/access_token", self.base_url))
+            .header("Accept", "application/json")
+            .header("User-Agent", &self.user_agent)
+            .form(&[
+                ("client_id", client_id),
+                ("device_code", device_code),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ])
+            .send()
             .await
-            .map_err(|e| format!("Device poll failed: {}", e))?;
-        if let Some(token) = resp.access_token {
-            Ok(git_vacuum_core::DeviceFlowPoll::Success { access_token: token, scopes: vec![] })
-        } else {
-            match resp.error.as_deref() {
-                Some("authorization_pending") => Ok(git_vacuum_core::DeviceFlowPoll::Pending),
-                Some("slow_down") => Ok(git_vacuum_core::DeviceFlowPoll::SlowDown {
-                    new_interval: std::time::Duration::from_secs(resp.interval.unwrap_or(10)),
-                }),
-                Some("expired_token") => Ok(git_vacuum_core::DeviceFlowPoll::Expired),
-                Some("access_denied") => Ok(git_vacuum_core::DeviceFlowPoll::AccessDenied),
-                _ => Err("Unknown OAuth error".to_string()),
+            .map_err(|e| AuthError::Network(e.to_string()))?;
+        let body: serde_json::Value = res
+            .json()
+            .await
+            .map_err(|e| AuthError::Internal(format!("json: {e}")))?;
+        match body["error"].as_str() {
+            Some("authorization_pending") => Ok(DeviceFlowPoll::Pending),
+            Some("slow_down") => {
+                let new_interval = std::time::Duration::from_secs(body["interval"].as_u64().unwrap_or(10));
+                Ok(DeviceFlowPoll::SlowDown { new_interval })
+            }
+            Some("expired_token") => Ok(DeviceFlowPoll::Expired),
+            Some("access_denied") => Ok(DeviceFlowPoll::AccessDenied),
+            Some(other) => Err(AuthError::Internal(format!("oauth error: {other}"))),
+            None => {
+                let token = body["access_token"].as_str().ok_or_else(|| AuthError::Internal("missing access_token".into()))?.to_string();
+                let scope_str = body["scope"].as_str().unwrap_or("");
+                let scopes: Vec<String> = scope_str.split_whitespace().map(|s| s.to_string()).collect();
+                Ok(DeviceFlowPoll::Success { access_token: token, scopes })
             }
         }
     }
 
-    async fn list_my_orgs(&self) -> Result<Vec<git_vacuum_core::OrgInfo>, String> {
-        let client = self.client.lock().unwrap().clone();
-        let orgs: Vec<octocrab::models::orgs::Organization> = client
-            .get("/user/orgs", None::<&()>)
+    async fn get_rate_limit(&self) -> Result<RateLimitStatus, DiscoveryError> {
+        let crab = self.unauth_client().map_err(auth_to_discovery)?;
+        let body: serde_json::Value = crab
+            .get(format!("{}/rate_limit", self.base_url), None::<&()>)
             .await
-            .map_err(|e| format!("List orgs failed: {}", e))?;
-        Ok(orgs.into_iter().map(|o| git_vacuum_core::OrgInfo {
-            github_org_id: o.id.into_inner() as i64,
-            login: o.login, display_name: o.name,
-            description: o.description, avatar_url: Some(o.avatar_url.to_string()),
-            repos_count: 0, discovered_at: chrono::Utc::now(),
-        }).collect())
-    }
-
-    async fn list_my_repos(&self) -> Result<Vec<git_vacuum_core::RemoteRepo>, String> {
-        let client = self.client.lock().unwrap().clone();
-        let repos: Vec<octocrab::models::Repository> = client
-            .get("/user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100", None::<&()>)
-            .await
-            .map_err(|e| format!("List repos failed: {}", e))?;
-        Ok(repos.into_iter().map(Self::map_repo).collect())
-    }
-
-    async fn list_org_repos(&self, org: &str) -> Result<Vec<git_vacuum_core::RemoteRepo>, String> {
-        let client = self.client.lock().unwrap().clone();
-        let repos: Vec<octocrab::models::Repository> = client
-            .get(&format!("/orgs/{}/repos?type=all&sort=updated&per_page=100", org), None::<&()>)
-            .await
-            .map_err(|e| format!("List org repos failed: {}", e))?;
-        Ok(repos.into_iter().map(Self::map_repo).collect())
-    }
-
-    async fn list_starred_repos(&self) -> Result<Vec<git_vacuum_core::RemoteRepo>, String> {
-        let client = self.client.lock().unwrap().clone();
-        let repos: Vec<octocrab::models::Repository> = client
-            .get("/user/starred?sort=created&per_page=100", None::<&()>)
-            .await
-            .map_err(|e| format!("List starred failed: {}", e))?;
-        Ok(repos.into_iter().map(Self::map_repo).collect())
-    }
-
-    async fn list_all_accessible_repos(&self) -> Result<Vec<git_vacuum_core::RemoteRepo>, String> {
-        let my_repos = self.list_my_repos().await?;
-        let orgs = self.list_my_orgs().await?;
-        let mut all_repos = my_repos;
-        for org in &orgs {
-            if let Ok(org_repos) = self.list_org_repos(&org.login).await {
-                for repo in org_repos {
-                    if !all_repos.iter().any(|r| r.github_id == repo.github_id) {
-                        all_repos.push(repo);
-                    }
-                }
-            }
-        }
-        Ok(all_repos)
+            .map_err(map_discovery_error)?;
+        let core = &body["resources"]["core"];
+        let now = Utc::now().timestamp();
+        let reset_epoch = core["reset"].as_i64().unwrap_or(now);
+        Ok(RateLimitStatus {
+            limit: core["limit"].as_u64().unwrap_or(5000) as u32,
+            remaining: core["remaining"].as_u64().unwrap_or(5000) as u32,
+            reset_at: Utc::now() + chrono::Duration::seconds((reset_epoch - now).max(0)),
+            resource: "core".to_string(),
+        })
     }
 }

@@ -10,4 +10,11 @@
 
 # logging
 - Avoid adding verbose log::debug!/log::info! calls throughout the codebase; user finds them annoying. Keep logging minimal or remove it. Confidence: 0.80
+- For Rust applications in this project, use env_logger with INFO level as the default (RUST_LOG=trace still works for debugging). Confidence: 0.65
+
+# git-vacuum
+- For git-vacuum "My Repos" source: include EVERY accessible repo (owner, collaborator, org_member) — do NOT filter out repos the user is only a collaborator on or has org membership in. User explicitly wants all of them. Confidence: 0.85
+
+# workflow
+- For large multi-component implementations, split into incremental milestone passes (e.g., 3-4 milestones) that each compile standalone, allowing review between passes rather than building all at once. Confidence: 0.70
 

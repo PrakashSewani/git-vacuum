@@ -1,8 +1,8 @@
-use async_trait::async_trait;
-
-#[async_trait]
 pub trait KeyringStore: Send + Sync {
-    async fn set_token(&self, service: &str, username: &str, token: &str) -> Result<(), String>;
-    async fn get_token(&self, service: &str, username: &str) -> Result<Option<String>, String>;
-    async fn delete_token(&self, service: &str, username: &str) -> Result<(), String>;
+    fn set_token(&self, token: &str) -> Result<(), crate::error::KeyringError>;
+    fn get_token(&self) -> Result<Option<String>, crate::error::KeyringError>;
+    fn delete_token(&self) -> Result<(), crate::error::KeyringError>;
+    fn has_token(&self) -> bool {
+        self.get_token().ok().flatten().is_some()
+    }
 }

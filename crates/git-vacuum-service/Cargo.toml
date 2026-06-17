@@ -3,16 +3,21 @@ name = "git-vacuum-service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Service orchestration layer (sync engine, discovery, auth)"
 
 [dependencies]
 git-vacuum-core = { path = "../git-vacuum-core" }
-tokio = { workspace = true, features = ["time", "macros", "rt"] }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt-multi-thread"] }
 futures = "0.3"
-log.workspace = true
-thiserror.workspace = true
-serde_json = "1"
-
-chrono = "0.4"
-
+log = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
-
+parking_lot = "0.12"
+# NOTE: This crate depends ONLY on git-vacuum-core, never on infrastructure crates.
+# This is the load-bearing hexagonal boundary. Verify with:
+#   cargo tree -p git-vacuum-service | grep git-vacuum-
+# (should only show core)

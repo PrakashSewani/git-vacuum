@@ -1,38 +1,43 @@
 use std::path::PathBuf;
-
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
-use crate::types::job::{JobId, ProgressSample};
-use crate::types::org::OrgInfo;
-use crate::types::repo::RepoEntry;
-use crate::types::repo_source::RepoSource;
-use crate::types::sync::{PartialSyncSummary, SyncOptions, SyncSummary};
-
-use crate::traits::git_ops::FetchResult;
+use crate::types::activity::ExportFormat;
+use crate::types::job::JobId;
+use crate::types::progress::OverallProgress;
+use crate::types::repo::{RepoEntry, RepoSource};
+use crate::types::sync::{PartialSyncSummary, SyncSummary};
+use crate::types::user::UserInfo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Dashboard = 0,
-    Explorer = 1,
-    SyncCenter = 2,
-    ActivityLog = 3,
-    Settings = 4,
+pub enum InputEvent {
+    Key(crossterm::event::KeyEvent),
+    Resize(u16, u16),
+    Tick,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
-    SwitchTab(Tab),
-    NextTab,
-    PrevTab,
     Quit,
     OpenHelp,
     OpenCommandPalette,
     DismissModal,
     ConfirmModal,
     NoOp,
+
+    SwitchTab(TabTarget),
+    NextTab,
+    PrevTab,
+
+    AuthSubmitToken(String),
+    AuthTokenInputChanged(String),
+    AuthStartOAuth,
+    AuthStartPAT,
+    AuthCancelOAuth,
+    AuthSkipForPublic,
 
     ExplorerToggle(usize),
     ExplorerSelectAll,
@@ -42,11 +47,14 @@ pub enum Action {
     ExplorerEndMarkMode,
     ExplorerSetFilter(String),
     ExplorerClearFilter,
-    ExplorerSortColumn(u8),
+    ExplorerSetSortColumn(u8),
+    ExplorerSetOrgInput(String),
+    ExplorerSetTopicFilter(String),
+    ExplorerToggleSkipArchived,
+    ExplorerToggleSkipForks,
     ExplorerStartSync,
     ExplorerInspect(usize),
     ExplorerOpenBrowser(usize),
-    ExplorerSetSource(RepoSource),
     ExplorerRefresh,
 
     SyncStart,
@@ -72,126 +80,60 @@ pub enum Action {
     SettingsNavigate(usize),
     SettingsEdit(usize),
     SettingsToggle(usize),
+    SettingsSelectDropdown(usize),
+    SettingsDropdownPick(usize),
     SettingsSave,
     SettingsDiscard,
     SettingsSwitchCategory(usize),
 
-    AuthSubmitToken(String),
-    AuthAppendToToken(String),    // append single character to token input
-    AuthSetToken(String),         // replace token input with pasted text
-    AuthBackspace,                 // delete last character
-    AuthStartOAuth,
-    AuthStartPAT,
-    AuthCancelOAuth,
-    AuthSkipForPublic,
-
     CommandPaletteFilter(String),
     CommandPaletteExecute(String),
     CommandPaletteDismiss,
+
+    RefreshDashboardStats,
+    LoadStoredCredentials,
+    Logout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TabTarget {
+    Dashboard,
+    Explorer,
+    SyncCenter,
+    ActivityLog,
+    Settings,
 }
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
-    AuthSucceeded {
-        username: String,
-        scopes: Vec<String>,
-        token_expires: Option<chrono::DateTime<chrono::Utc>>,
-    },
-    AuthFailed {
-        reason: String,
-        detail: String,
-    },
-    OAuthCodeReceived {
-        user_code: String,
-        verification_uri: String,
-        expires_in: Duration,
-    },
-    OAuthTokenReceived {
-        token: String,
-    },
+    AuthSucceeded { info: UserInfo },
+    AuthFailed { reason: String, detail: String },
+    OAuthCodeReceived { user_code: String, verification_uri: String, expires_in: Duration },
+    OAuthTokenReceived { token: String, scopes: Vec<String> },
     OAuthTimeout,
+    LoggedOut,
 
-    ReposDiscovered {
-        repos: Vec<RepoEntry>,
-        source: RepoSource,
-    },
-    DiscoveryProgress {
-        repos_found: usize,
-        estimated_total: Option<usize>,
-    },
-    DiscoveryFailed {
-        error: String,
-    },
+    ReposDiscovered { source: RepoSource, count: usize },
+    DiscoveryFailed { error: String },
 
-    SyncCloneStarted {
-        repo_full_name: String,
-        job_id: JobId,
-    },
-    SyncCloneProgress(ProgressSample),
-    SyncCloneCompleted {
-        repo_full_name: String,
-        job_id: JobId,
-        size_bytes: u64,
-        duration: Duration,
-    },
-    SyncFetchStarted {
-        repo_full_name: String,
-        job_id: JobId,
-    },
-    SyncFetchCompleted {
-        repo_full_name: String,
-        job_id: JobId,
-        result: FetchResult,
-    },
-    SyncRepoFailed {
-        repo_full_name: String,
-        job_id: JobId,
-        error: String,
-    },
-    SyncRepoUpToDate {
-        repo_full_name: String,
-        job_id: JobId,
-    },
-    SyncRepoRetrying {
-        repo_full_name: String,
-        job_id: JobId,
-        attempt: u32,
-        delay: Duration,
-        reason: String,
-    },
+    SyncCloneStarted { job_id: JobId, repo_full_name: String },
+    SyncCloneProgress { job_id: JobId, repo_full_name: String, bytes: u64, total: u64 },
+    SyncCloneCompleted { job_id: JobId, repo_full_name: String, size_bytes: u64, duration: Duration },
+    SyncFetchStarted { job_id: JobId, repo_full_name: String },
+    SyncFetchProgress { job_id: JobId, repo_full_name: String, bytes: u64 },
+    SyncFetchCompleted { job_id: JobId, repo_full_name: String, new_commits: u32, bytes_fetched: u64, duration: Duration },
+    SyncRepoFailed { job_id: JobId, repo_full_name: String, error: String },
+    SyncRepoUpToDate { job_id: JobId, repo_full_name: String },
 
-    SyncAllStarted {
-        run_id: i64,
-        total_jobs: usize,
-    },
-    SyncAllCompleted {
-        summary: SyncSummary,
-    },
-    SyncCancelled {
-        summary: PartialSyncSummary,
-    },
+    SyncAllCompleted { summary: SyncSummary },
     SyncPaused,
     SyncResumed,
-    SyncRateLimited {
-        retry_in: Duration,
-    },
+    SyncCancelled { summary: PartialSyncSummary },
+    SyncProgressUpdated { progress: OverallProgress },
 
-    StatsRefreshed {
-        total_repos: usize,
-        up_to_date: usize,
-        behind: usize,
-        errors: usize,
-        total_size_bytes: u64,
-        attention_list: Vec<RepoEntry>,
-    },
-
-    OrgsDiscovered {
-        orgs: Vec<OrgInfo>,
-    },
-
-    FatalError {
-        message: String,
-    },
+    StatsRefreshed,
+    ReposLoaded { entries: Vec<RepoEntry> },
+    FatalError { message: String },
 }
 
 #[derive(Debug, Clone)]
@@ -199,31 +141,57 @@ pub enum Effect {
     AuthenticatePat { token: String },
     StartOAuthDeviceFlow { client_id: String, scopes: Vec<String> },
     PollOAuthToken { client_id: String, device_code: String, interval: Duration },
+    CancelOAuth,
     LoadStoredCredentials,
+    Logout,
+
     DiscoverRepos { source: RepoSource },
-    StartSync { repos: Vec<RepoEntry>, options: SyncOptions, base_path: PathBuf },
+    PersistRepoSelection { github_ids: Vec<i64>, selected: bool },
+    LoadReposFromDb,
+
+    StartSync { repos: Vec<RepoEntry>, base_path: PathBuf, concurrency: usize },
+    CloneSingle { repo: RepoEntry, base_path: PathBuf },
+    SyncSingle { repo: RepoEntry, local_path: PathBuf },
+    PauseSync,
+    ResumeSync,
+    CancelSync,
+
     RefreshDashboardStats,
-    RecordSyncRun { summary: SyncSummary },
-    PersistSettings { settings: crate::types::settings::AppSettings },
-    SaveSettings { settings: Vec<(String, String)> },
+
+    RecordSyncRun { run_id: Option<i64>, summary: SyncSummary, options_json: Option<String> },
+    ExportRun { run_id: i64, format: ExportFormat, path: PathBuf },
+
+    SaveSetting { key: String, value: String },
     TestConnection,
+
+    PersistRepos { entries: Vec<RepoEntry> },
+    MarkReposDeleted { github_ids: Vec<i64> },
+
     None,
 }
 
+#[derive(Debug, Clone)]
 pub struct EventBus {
     pub app_tx: mpsc::UnboundedSender<AppEvent>,
-    pub app_rx: mpsc::UnboundedReceiver<AppEvent>,
     pub progress_tx: mpsc::UnboundedSender<AppEvent>,
-    pub progress_rx: mpsc::UnboundedReceiver<AppEvent>,
     pub cancel_tx: watch::Sender<bool>,
-    pub cancel_rx: watch::Receiver<bool>,
 }
 
 impl EventBus {
-    pub fn new() -> Self {
+    pub fn new() -> (Self, EventBusHandle) {
         let (app_tx, app_rx) = mpsc::unbounded_channel();
         let (progress_tx, progress_rx) = mpsc::unbounded_channel();
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        Self { app_tx, app_rx, progress_tx, progress_rx, cancel_tx, cancel_rx }
+
+        let handle = EventBusHandle { app_rx, progress_rx, cancel_rx };
+        let bus = Self { app_tx, progress_tx, cancel_tx };
+        (bus, handle)
     }
+}
+
+#[derive(Debug)]
+pub struct EventBusHandle {
+    pub app_rx: mpsc::UnboundedReceiver<AppEvent>,
+    pub progress_rx: mpsc::UnboundedReceiver<AppEvent>,
+    pub cancel_rx: watch::Receiver<bool>,
 }

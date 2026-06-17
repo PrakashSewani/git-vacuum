@@ -72,7 +72,7 @@ The MVP is a **Ratatui TUI application** that does exactly three things and does
 | Stats/analytics CSV export | Ghorg already does this well. Investigate for v1.0. |
 | Config file (YAML/TOML) | MVP uses command-line flags + environment variables only. |
 | Docker image | v1.0 distribution concern. |
-| HTTP server / reclone-server | Ghorg's advanced automation. Not for MVP. |
+| HTTP server / reclone-server | Ghorg's advanced automation. **Not for MVP — and not for any future version either.** Git-Vacuum is a local-only TUI that talks directly to the GitHub REST API. There is no server component and none is planned. See [git-vacuum-architecture.md §0](./git-vacuum-architecture.md) and [no-backend-rationale.md](./no-backend-rationale.md) for the permanent architectural decision and the triggers (none of which apply today) under which this might be revisited. |
 | Submodule cloning | Edge case. Default clone behavior (no --recursive) is fine. |
 
 ---

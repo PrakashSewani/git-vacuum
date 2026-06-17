@@ -3,13 +3,14 @@ name = "git-vacuum-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Application state, reducer, tab routing (Elm/Redux pattern)"
 
 [dependencies]
 git-vacuum-core = { path = "../git-vacuum-core" }
-tokio.workspace = true
-log.workspace = true
-
-chrono = "0.4"
-
-async-trait = "0.1"
-
+git-vacuum-service = { path = "../git-vacuum-service" }
+tokio = { workspace = true, features = ["sync"] }
+log = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"

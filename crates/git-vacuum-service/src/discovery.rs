@@ -1,100 +1,167 @@
 use std::sync::Arc;
 
-use git_vacuum_core::{AppEvent, RepoSource, RemoteRepo, RepoEntry};
-use git_vacuum_core::traits::{Database, GithubApi};
-use git_vacuum_core::types::repo::CloneStatus;
-use tokio::sync::mpsc;
+use git_vacuum_core::{
+    list_for_source, DiscoveryError, RemoteRepo, RepoEntry, RepoSource,
+};
 
-pub async fn discover_repos(
+use crate::merge::{merge_remote_into, should_prune_from_scope};
+use crate::Services;
+
+/// Fetch remote repos from GitHub, merge with cached entries, persist.
+/// Returns the new merged list (suitable for the UI's Explorer).
+pub async fn discover(
+    services: Arc<Services>,
     source: RepoSource,
-    github: Arc<dyn GithubApi>,
-    db: Arc<dyn Database>,
-    app_tx: mpsc::UnboundedSender<AppEvent>,
-    cancel_rx: tokio::sync::watch::Receiver<bool>,
-) -> Result<Vec<RepoEntry>, String> {
-    let remote_repos = match &source {
-        RepoSource::MyRepos => github.list_my_repos().await?,
-        RepoSource::OrgRepos(org) => github.list_org_repos(org).await?,
-        RepoSource::Starred => github.list_starred_repos().await?,
-        RepoSource::AllAccessible => github.list_all_accessible_repos().await?,
-    };
+) -> Result<Vec<RepoEntry>, DiscoveryError> {
+    // 1. Validate token first (fail fast)
+    services.github.get_authenticated_user().await
+        .map_err(|e| DiscoveryError::Auth(format!("{e}")))?;
 
-    let _ = app_tx.send(AppEvent::DiscoveryProgress {
-        repos_found: remote_repos.len(),
-        estimated_total: Some(remote_repos.len()),
-    });
+    // 2. Fetch remote repos
+    let remote = list_for_source(services.github.as_ref(), &source).await?;
 
-    merge_and_cache(remote_repos, &source, db, app_tx).await
-}
-
-async fn merge_and_cache(
-    remote_repos: Vec<RemoteRepo>,
-    source: &RepoSource,
-    db: Arc<dyn Database>,
-    app_tx: mpsc::UnboundedSender<AppEvent>,
-) -> Result<Vec<RepoEntry>, String> {
-    let cached = db.get_all_repos().await?;
-    let mut cached_by_id: std::collections::HashMap<i64, git_vacuum_core::traits::database::RepoRow> = cached
-        .into_iter()
-        .map(|r| (r.github_id, r))
+    // 3. Load cached entries
+    let cached = services.db.get_all_repos().map_err(|e| DiscoveryError::Internal(e.to_string()))?;
+    let cached_by_id: std::collections::HashMap<i64, _> = cached
+        .iter()
+        .map(|r| (r.github_id, r.clone()))
         .collect();
 
-    let mut entries = Vec::new();
-
-    for remote in &remote_repos {
-        let (clone_status, local_path, behind_count, last_synced_at, last_error, selected) =
-            if let Some(cached) = cached_by_id.get(&remote.github_id) {
-                let status = match cached.clone_status.as_str() {
-                    "cloned" => CloneStatus::Cloned,
-                    "stale" => CloneStatus::Stale,
-                    "error" => CloneStatus::Error,
-                    _ => CloneStatus::NotCloned,
-                };
-                (status, cached.local_path.clone(), cached.behind_count,
-                 cached.last_synced_at.clone(), cached.last_error.clone(), cached.selected)
-            } else {
-                (CloneStatus::NotCloned, None, 0, None, None, true)
-            };
-
-        entries.push(RepoEntry {
-            github_id: remote.github_id,
-            owner_login: remote.owner_login.clone(),
-            name: remote.name.clone(),
-            full_name: remote.full_name.clone(),
-            description: remote.description.clone(),
-            language: remote.language.clone(),
-            default_branch: remote.default_branch.clone(),
-            visibility: remote.visibility.clone(),
-            is_fork: remote.is_fork,
-            is_archived: remote.is_archived,
-            is_template: remote.is_template,
-            size_kb: remote.size_kb,
-            stars: remote.stars,
-            open_issues: remote.open_issues,
-            license_spdx: remote.license_spdx.clone(),
-            topics: remote.topics.clone(),
-            clone_url_ssh: remote.clone_url_ssh.clone(),
-            clone_url_https: remote.clone_url_https.clone(),
-            homepage_url: remote.homepage_url.clone(),
-            pushed_at: remote.pushed_at,
-            clone_status,
-            local_path,
-            local_size_kb: None,
-            behind_count,
-            ahead_count: 0,
-            last_synced_at: last_synced_at.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
-            last_error,
-            last_error_at: None,
-            selected,
-            deleted_on_remote: false,
-            discovered_at: Some(chrono::Utc::now()),
+    // 4. Build merged entries
+    let mut merged: Vec<RepoEntry> = Vec::with_capacity(remote.len());
+    for r in remote {
+        let existing_repo_row = cached_by_id.get(&r.github_id);
+        // Try to find a matching RepoEntry for state preservation
+        let existing_entry: Option<RepoEntry> = existing_repo_row.and_then(|row| {
+            // We need to convert RepoRow back to RepoEntry. Since we have the RepoRow,
+            // we can use it as a fallback source. The simpler path: build a fresh entry
+            // and let merge_remote_into use the row's preserved state.
+            Some(row_to_entry(row))
         });
+        let new = existing_repo_row.map(|r| r.selected).unwrap_or(true);
+        merged.push(merge_remote_into(r, existing_entry.as_ref(), new));
     }
 
-    let _ = app_tx.send(AppEvent::ReposDiscovered {
-        repos: entries.clone(),
-        source: source.clone(),
-    });
+    // 5. Mark cached-but-not-in-remote as deleted_on_remote (if in scope)
+    let remote_ids: std::collections::HashSet<i64> = merged.iter().map(|e| e.github_id).collect();
+    let mut marked = 0usize;
+    for cached_entry in &cached {
+        if !remote_ids.contains(&cached_entry.github_id) {
+            if should_prune_from_scope(&row_to_entry(cached_entry), &source) {
+                let _ = services.db.mark_repo_deleted_on_remote(cached_entry.github_id);
+                marked += 1;
+            }
+        }
+    }
 
-    Ok(entries)
+    // 6. Persist merged list
+    let rows: Vec<_> = merged.iter().map(entry_to_row).collect();
+    services
+        .db
+        .upsert_repos(&rows)
+        .map_err(|e| DiscoveryError::Internal(e.to_string()))?;
+
+    Ok(merged)
+}
+
+/// Check whether a repo is within the scope of a discovery source.
+/// Public so `merge::should_prune_from_scope` can use it.
+pub fn is_in_scope(repo: &RepoEntry, source: &RepoSource) -> bool {
+    match source {
+        RepoSource::MyRepos => {
+            // We approximate "my repos" as "not in any org" — we don't track owner_is_org here
+            // since RepoEntry doesn't carry it. The org filter for "all" will catch the rest.
+            true
+        }
+        RepoSource::Org { login } => repo.owner_login.eq_ignore_ascii_case(login),
+        RepoSource::Starred => true,
+        RepoSource::All => true,
+    }
+}
+
+#[allow(dead_code)]
+pub async fn fetch_remote_repos(
+    services: Arc<Services>,
+    source: &RepoSource,
+) -> Result<Vec<RemoteRepo>, DiscoveryError> {
+    list_for_source(services.github.as_ref(), source).await
+}
+
+fn row_to_entry(row: &git_vacuum_core::RepoRow) -> RepoEntry {
+    let topics: Vec<String> = row
+        .topics_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    RepoEntry {
+        github_id: row.github_id,
+        owner_login: row.owner.clone(),
+        name: row.name.clone(),
+        full_name: row.full_name.clone(),
+        description: row.description.clone(),
+        language: row.language.clone(),
+        default_branch: row.default_branch.clone(),
+        visibility: match row.visibility.as_str() {
+            "private" => git_vacuum_core::RepoVisibility::Private,
+            "internal" => git_vacuum_core::RepoVisibility::Internal,
+            _ => git_vacuum_core::RepoVisibility::Public,
+        },
+        is_fork: row.is_fork,
+        is_archived: row.is_archived,
+        size_kb: row.size_kb,
+        stars: row.stars,
+        pushed_at: row.pushed_at,
+        updated_at: row.updated_at,
+        topics,
+        clone_url_https: row.clone_url_https.clone(),
+        clone_url_ssh: row.clone_url_ssh.clone(),
+        clone_status: row.clone_status,
+        local_path: row.local_path.clone(),
+        local_size_kb: row.local_size_kb,
+        last_synced_at: row.last_synced_at,
+        last_error: row.last_error.clone(),
+        behind_count: row.behind_count,
+        selected: row.selected,
+        deleted_on_remote: row.deleted_on_remote,
+        discovered_at: row.discovered_at,
+    }
+}
+
+fn entry_to_row(e: &RepoEntry) -> git_vacuum_core::RepoRow {
+    let visibility = match e.visibility {
+        git_vacuum_core::RepoVisibility::Public => "public",
+        git_vacuum_core::RepoVisibility::Private => "private",
+        git_vacuum_core::RepoVisibility::Internal => "internal",
+    };
+    let topics_json = serde_json::to_string(&e.topics).ok();
+    git_vacuum_core::RepoRow {
+        id: 0,
+        github_id: e.github_id,
+        owner: e.owner_login.clone(),
+        name: e.name.clone(),
+        full_name: e.full_name.clone(),
+        description: e.description.clone(),
+        language: e.language.clone(),
+        stars: e.stars,
+        default_branch: e.default_branch.clone(),
+        visibility: visibility.to_string(),
+        is_fork: e.is_fork,
+        is_archived: e.is_archived,
+        clone_url_ssh: e.clone_url_ssh.clone(),
+        clone_url_https: e.clone_url_https.clone(),
+        size_kb: e.size_kb,
+        pushed_at: e.pushed_at,
+        created_at: e.discovered_at,
+        updated_at: e.updated_at,
+        clone_status: e.clone_status,
+        local_path: e.local_path.clone(),
+        local_size_kb: e.local_size_kb,
+        last_synced_at: e.last_synced_at,
+        last_error: e.last_error.clone(),
+        behind_count: e.behind_count,
+        selected: e.selected,
+        discovered_at: e.discovered_at,
+        deleted_on_remote: e.deleted_on_remote,
+        topics_json,
+    }
 }

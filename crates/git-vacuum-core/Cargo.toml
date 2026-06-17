@@ -3,10 +3,17 @@ name = "git-vacuum-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared kernel: types, traits, events, errors for git-vacuum"
 
 [dependencies]
-tokio = { workspace = true, features = ["time"] }
-thiserror.workspace = true
-serde.workspace = true
+serde = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros", "rt"] }
 chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+log = { workspace = true }
+crossterm = "0.28"
 async-trait = "0.1"

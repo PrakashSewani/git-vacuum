@@ -221,7 +221,7 @@ enum DeviceFlowPoll {
 
 If scopes are insufficient, the error message specifies which scopes are missing and links to the PAT creation page.
 
-**Token storage:** The raw token string is stored in the OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service / `libsecret`). It is NEVER stored in SQLite. The `github_accounts` table stores only metadata (scopes, expiry, user info).
+**Token storage:** See §2.6 below for the full contract. Summary: the raw token string is stored in the OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service / `libsecret`). It is NEVER stored in SQLite. The `settings` table stores only metadata (username, scopes, expiry) — none of which are secrets.
 
 ### 2.3 OAuth Device Flow
 
@@ -332,6 +332,81 @@ After initial auth, the token is validated:
 - 401 Unauthorized → token expired or revoked. Clear keyring. Transition to Auth gate screen.
 - 403 Forbidden → token lacks required scopes or account is suspended. Show specific error.
 - Network timeout → retry with backoff. Show "Cannot reach GitHub" banner. App remains in cached/offline mode.
+
+### 2.6 Token Storage Contract
+
+This section is the authoritative spec for where the token lives, how it's protected, and how it gets re-validated. All other sections refer back here.
+
+#### 2.6.1 Where the token goes
+
+After `AuthSucceeded`, the single write site is `KeyringStore::set_token(token)`:
+
+```
+Effect::AuthenticatePat → validate via GET /user
+                        → keyring.set_token(token)        // ← ONLY place token is persisted
+                        → emit AppEvent::AuthSucceeded
+```
+
+| Store | Holds | Lifetime |
+|---|---|---|
+| **OS Keyring** (`service = "git-vacuum"`, `account = "github-pat"`) | The PAT or OAuth access token string | Until user runs `:auth logout` or token validation fails on 401 |
+| **SQLite `settings` table** | `github_username`, `scopes_json`, `token_expires_at` (metadata only) | Persistent — used to show "Logged in as @user" on the auth gate without re-reading the keyring |
+| **In-memory `App` / `Services`** | Token in `Arc<Services>` while the app runs | Dropped on quit |
+| **Filesystem logs / SQLite row content** | **NEVER** the token | N/A |
+
+#### 2.6.2 Keyring implementation (`keyring/` module)
+
+The `KeyringStore` trait abstracts three platforms behind one API:
+
+```
+trait KeyringStore: Send + Sync {
+    fn set_token(&self, token: &str) -> Result<()>;
+    fn get_token(&self) -> Result<Option<String>>;
+    fn delete_token(&self) -> Result<()>;
+}
+```
+
+Concrete impls (per `keyring/platform.rs`):
+
+- **macOS:** `security` CLI / Security.framework via the `keyring` crate. Service: `git-vacuum`, Account: `github-pat`.
+- **Windows:** `wincred` (Credential Manager vault) via the `keyring` crate.
+- **Linux:** `libsecret` (Secret Service / GNOME Keyring / KWallet) via the `keyring` crate. **Fallback policy:** if no Secret Service is available (headless server, no DBus session), the operation fails with a clear error rather than silently falling back to plaintext. Users who need a headless install can use the `--token <pat>` env-var or flag for that session.
+
+#### 2.6.3 Token rotation & revocation flow
+
+```
+Startup:
+  1. App::new() reads keyring → if token present, spawn validation task
+  2. validate_token() → GET /user with Bearer token
+  3a. 200 OK → parse X-OAuth-Scopes header, update SQLite metadata, transition to Running
+  3b. 401 Unauthorized → keyring.delete_token(), transition to Auth gate, emit AppEvent::AuthFailed { reason: "expired_or_revoked" }
+  3c. Network error → retry with backoff (3 attempts, 1s/2s/4s). If still failing, allow Running in offline mode (cached data only, no discovery).
+
+Mid-session expiry (rare, mostly affects long-lived OAuth tokens):
+  Any service-layer API call that returns 401 → emit AppEvent::AuthFailed → reducer transitions Running → Auth, clears in-memory token reference, shows modal "Your session expired. Please re-authenticate."
+  Keyring is NOT auto-deleted on 401 — user might re-validate the same token from a different device.
+```
+
+#### 2.6.4 OAuth device flow specifics
+
+OAuth tokens are stored identically to PATs — in the OS keyring under the same `service = "git-vacuum", account = "github-pat"` slot. The user experience is identical post-auth: they don't care whether they typed a PAT or completed device flow; the system stores the resulting access token the same way.
+
+`client_secret` (if used for non-public OAuth clients) is read from:
+- Env var `GIT_VACUUM_CLIENT_SECRET` first
+- Config file `~/.config/git-vacuum/config.toml` second
+- Bundled default for public-client device flow (no secret needed)
+
+`client_secret` is **never** written to SQLite, never logged, never embedded in error messages.
+
+#### 2.6.5 Security audit checklist (for the implementer)
+
+- [ ] Grep the codebase for `token` — verify it only appears in `keyring/`, `service/auth_service.rs`, and `ui/components/input_field.rs` (for the masked input). Command: `grep -rn "token" src/ | grep -v keyring | grep -v auth_service.rs | grep -v input_field.rs` should return zero hits.
+- [ ] Grep SQLite migrations and queries — no column named `token`, `access_token`, `pat`, `secret`.
+- [ ] Grep log calls (`log::*!`) — no token interpolation. The `taste` file says minimize logging anyway.
+- [ ] Token input field in TUI uses `mask_input: true` (already in the `Modal::InputPrompt` design).
+- [ ] Error messages from `service/auth_service.rs` map `GithubError::Auth(InvalidToken)` to "Authentication failed" — never echo the token back.
+- [ ] When the user types `Ctrl+C` during OAuth device flow polling, `cancel_tx` triggers and the polling task aborts — no partial token lingering.
+- [ ] Token-never-logged test: `RUST_LOG=trace git-vacuum sync --token ghp_FAKEFAKEFAKEFAKEFAKE` (using a deliberately fake token). Grep stderr for the token string — must not appear.
 
 ---
 

@@ -1,410 +1,167 @@
-pub mod input;
+pub mod components;
+pub mod layout;
+pub mod screens;
 pub mod terminal;
+pub mod theme;
 
-use git_vacuum_app::{App, AppState, Modal, SyncPhase};
-use git_vacuum_app::LogEntryStatus;
-use git_vacuum_core::Tab;
+use ratatui::layout::Rect;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::Frame;
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
+use git_vacuum_app::state::AppState;
+use git_vacuum_app::App;
+use crate::components::{key_bar, tab_bar, title_bar};
+use crate::layout::shell_layout;
+use crate::screens::activity_log::render_activity_log;
+use crate::screens::auth::render_auth;
+use crate::screens::dashboard::render_dashboard;
+use crate::screens::explorer::render_explorer;
+use crate::screens::settings::render_settings;
+use crate::screens::sync_center::render_sync_center;
+use crate::theme::{COLOR_MUTED, COLOR_PRIMARY};
 
-pub fn render(frame: &mut ratatui::Frame, app: &App) {
-    let area = frame.area();
-    if area.width < 80 || area.height < 24 {
-        render_too_small(frame, area);
-        return;
-    }
+/// Main entry point: render the entire UI for the current app state.
+pub fn render(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let chunks = shell_layout(area);
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(area);
-
-    let title_area = chunks[0];
-    let tab_area = chunks[1];
-    let content_area = chunks[2];
-    let key_bar_area = chunks[3];
-
-    render_title_bar(frame, title_area, app);
-    render_tab_bar(frame, tab_area, app);
-    render_content(frame, content_area, app);
-    render_key_bar(frame, key_bar_area, app);
-
-    if let AppState::Running(state) = &app.state {
-        if let Some(modal) = state.modal_stack.last() {
-            render_modal(frame, area, modal);
-        }
-    }
-}
-
-fn render_too_small(frame: &mut ratatui::Frame, area: Rect) {
-    let msg = Paragraph::new("Terminal too small. Please resize to at least 80x24.")
-        .block(Block::default().borders(Borders::ALL).title("git-vacuum"))
-        .centered();
-    frame.render_widget(msg, area);
-}
-
-fn render_title_bar(frame: &mut ratatui::Frame, area: Rect, app: &App) {
-    let text = match &app.state {
-        AppState::Auth(_) => "git-vacuum v0.1.0 | Authenticate to continue".to_string(),
-        AppState::Running(state) => {
-            let status = match state.tabs.sync_center.phase {
-                SyncPhase::Active => "⣾ Syncing...",
-                SyncPhase::Paused => "⏸ Paused",
-                _ => "Ready",
-            };
-            format!(
-                "git-vacuum | {} | {} repos | {}",
-                state.username,
-                state.repos.len(),
-                status,
-            )
-        }
-        AppState::FatalError { .. } => "git-vacuum | ERROR".to_string(),
+    // Title bar
+    let user = match &app.state {
+        AppState::Running(r) => r.authenticated_user.as_ref(),
+        _ => None,
     };
-
-    let p = Paragraph::new(text)
+    let stats = match &app.state {
+        AppState::Running(r) => r.tab_states.dashboard.stats.as_ref(),
+        _ => None,
+    };
+    let title_lines = title_bar(user, stats);
+    let title_widget = Paragraph::new(title_lines)
         .block(Block::default().borders(Borders::BOTTOM));
-    frame.render_widget(p, area);
-}
+    f.render_widget(title_widget, chunks[0]);
 
-fn render_tab_bar(frame: &mut ratatui::Frame, area: Rect, app: &App) {
-    let tabs = vec!["Dashboard", "Explorer", "Sync Center", "Activity Log", "Settings"];
-    let active_idx = match &app.state {
-        AppState::Running(state) => state.active_tab as usize,
-        _ => 0,
-    };
-
-    let titles: Vec<Line> = tabs.iter().enumerate().map(|(i, t)| {
-        if i == active_idx {
-            Line::from(Span::styled(
-                format!(" ▸ {} ", t),
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Black)
-                    .bg(ratatui::style::Color::White),
-            ))
-        } else {
-            Line::from(Span::styled(
-                format!("   {}   ", t),
-                ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
-            ))
-        }
-    }).collect();
-
-    let tabs_widget = Tabs::new(titles).block(Block::default());
-    frame.render_widget(tabs_widget, area);
-}
-
-fn render_content(frame: &mut ratatui::Frame, area: Rect, app: &App) {
+    // Tab bar (only when running)
     match &app.state {
-        AppState::Auth(state) => render_auth_screen(frame, area, state),
-        AppState::Running(state) => {
-            match state.active_tab {
-                Tab::Dashboard => render_dashboard(frame, area, state),
-                Tab::Explorer => render_explorer(frame, area, state),
-                Tab::SyncCenter => render_sync_center(frame, area, state),
-                Tab::ActivityLog => render_activity_log(frame, area, state),
-                Tab::Settings => render_settings(frame, area, state),
-            }
-        }
-        AppState::FatalError { message } => {
-            let p = Paragraph::new(message.as_str())
-                .block(Block::default().borders(Borders::ALL).title("Fatal Error"))
-                .centered();
-            frame.render_widget(p, area);
-        }
-    }
-}
+        AppState::Running(r) => {
+            let tab_line = tab_bar(r.active_tab);
+            let tab_widget = Paragraph::new(tab_line)
+                .block(Block::default().borders(Borders::BOTTOM));
+            f.render_widget(tab_widget, chunks[1]);
 
-fn render_key_bar(frame: &mut ratatui::Frame, area: Rect, app: &App) {
-    let keys = match &app.state {
-        AppState::Auth(_) => "s:Submit | q:Quit | ?:Help",
-        AppState::Running(state) => {
-            match state.active_tab {
-                Tab::Dashboard => "r:Refresh  s:Sync  Tab:Next  q:Quit  ?:Help",
-                Tab::Explorer => "Space:Toggle  r:Refresh  s:Sync  /:Filter  Tab:Next  q:Quit  ?:Help",
-                Tab::SyncCenter => match state.tabs.sync_center.phase {
-                    SyncPhase::PreSync { .. } => "Enter:Start  Tab:Next  q:Quit",
-                    SyncPhase::Active => "p:Pause  c:Cancel  f:Follow  Tab:Next  q:Quit",
-                    SyncPhase::Paused => "r:Resume  c:Cancel  Tab:Next  q:Quit",
-                    _ => "Tab:Next  q:Quit",
-                },
-                Tab::ActivityLog => "Enter:Detail  Tab:Next  q:Quit  ?:Help",
-                Tab::Settings => "Tab:Next  q:Quit  ?:Help",
-            }
-        }
-        _ => "q:Quit",
-    };
+            // Main content per active tab
+            render_active_tab(f, chunks[2], app);
 
-    let p = Paragraph::new(keys)
-        .block(Block::default().borders(Borders::TOP));
-    frame.render_widget(p, area);
-}
-
-fn render_modal(frame: &mut ratatui::Frame, area: Rect, modal: &Modal) {
-    let modal_area = centered_rect(60, 20, area);
-    let (title, content) = match modal {
-        Modal::Confirmation { title, message, confirm_label, cancel_label, danger, .. } => {
-            let color = if *danger {
-                ratatui::style::Color::Red
-            } else {
-                ratatui::style::Color::Yellow
+            // Key bar
+            let bindings: Vec<(&str, &str)> = match r.active_tab {
+                git_vacuum_app::state::TabKind::Dashboard => vec![
+                    ("r", "refresh"), ("s", "sync"), ("?", "help"), ("q", "quit"),
+                ],
+                git_vacuum_app::state::TabKind::Explorer => vec![
+                    ("↑↓", "navigate"), ("Space", "toggle"), ("Enter", "sync"),
+                    ("Ctrl+A", "all"), ("/", "filter"), ("?", "help"),
+                ],
+                git_vacuum_app::state::TabKind::SyncCenter => vec![
+                    ("p", "pause"), ("r", "resume"), ("c", "cancel"),
+                    ("?", "help"), ("q", "quit"),
+                ],
+                git_vacuum_app::state::TabKind::ActivityLog => vec![
+                    ("Enter", "view"), ("r", "refresh"), ("?", "help"),
+                ],
+                git_vacuum_app::state::TabKind::Settings => vec![
+                    ("Tab", "category"), ("Enter", "edit"),
+                    ("Ctrl+S", "save"), ("Esc", "discard"), ("?", "help"),
+                ],
             };
-            (title.as_str(), vec![
-                Line::from(""),
-                Line::from(message.as_str()),
-                Line::from(""),
-                Line::from(format!(" [Enter] {}  [Esc] {}", confirm_label, cancel_label)),
-            ])
+            f.render_widget(
+                Paragraph::new(key_bar(&bindings))
+                    .block(Block::default().borders(Borders::TOP)),
+                chunks[3],
+            );
         }
-        Modal::Help { .. } => ("Keyboard Shortcuts", vec![
-            Line::from("1-5: Switch tabs | Tab: Next tab | q: Quit | ?: Help"),
-            Line::from("Space: Toggle repo | r: Refresh | s: Sync"),
-            Line::from("p: Pause sync | c: Cancel sync | Enter: Confirm"),
-        ]),
-        Modal::ErrorDetail { repo_full_name, error_message, .. } => {
-            ("Error Detail", vec![
-                Line::from(format!("Repository: {}", repo_full_name)),
-                Line::from(""),
-                Line::from(error_message.as_str()),
-            ])
+        AppState::Auth(_) => {
+            // No tab bar; render auth screen
+            render_auth_screen(f, chunks[2], app);
+            let bindings: Vec<(&str, &str)> = vec![("Enter", "submit"), ("Esc", "quit")];
+            f.render_widget(
+                Paragraph::new(key_bar(&bindings))
+                    .block(Block::default().borders(Borders::TOP)),
+                chunks[3],
+            );
         }
-        Modal::RepoDetail { repo_index, .. } => {
-            ("Repository Detail", vec![
-                Line::from(format!("Index: {}", repo_index)),
-                Line::from("(Details coming in full implementation)"),
-            ])
+        AppState::FatalError(msg) => {
+            let p = Paragraph::new(format!("\n  FATAL: {msg}\n\n  Press q to quit."))
+                .block(Block::default().borders(Borders::ALL))
+                .wrap(Wrap { trim: false });
+            f.render_widget(p, chunks[2]);
         }
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(ratatui::style::Style::default().fg(ratatui::style::Color::Cyan));
-
-    let p = Paragraph::new(content).block(block);
-    frame.render_widget(p, modal_area);
+    }
 }
 
-fn render_auth_screen(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    state: &git_vacuum_app::AuthScreenState,
-) {
-    let mut content = vec![
-        Line::from(""),
-        Line::from("  Connect your GitHub account to discover and sync your repositories."),
-        Line::from(""),
-        Line::from("  Enter your GitHub Personal Access Token:"),
-        Line::from(""),
-        Line::from(format!("  {}", "*".repeat(state.token_input.len()))),
-        Line::from(""),
-        Line::from("  Token needs: repo, read:org scope"),
-        Line::from(""),
-    ];
-
-    if let Some(status) = &state.status_message {
-        content.push(Line::from(""));
-        content.push(Line::from(vec![
-            Span::styled("  ", ratatui::style::Style::default()),
-            Span::styled(status.as_str(), ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)),
-        ]));
-    }
-
-    if let Some((_reason, detail)) = &state.error {
-        content.push(Line::from(""));
-        content.push(Line::from(vec![
-            Span::styled("  ERROR: ", ratatui::style::Style::default().fg(ratatui::style::Color::Red)),
-            Span::styled(detail.as_str(), ratatui::style::Style::default()),
-        ]));
-    }
-
-    let extra_lines = if state.error.is_some() { 2 } else if state.status_message.is_some() { 2 } else { 0 };
-    let msg_area = centered_rect(60, content.len() as u16 + 3 + extra_lines, area);
-    let title = if state.error.is_some() { "Authentication" } else { "Git-Vacuum Authentication" };
-    let block = Block::default().borders(Borders::ALL).title(title);
-    let p = Paragraph::new(content).block(block);
-    frame.render_widget(p, msg_area);
-}
-
-fn render_explorer(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    state: &git_vacuum_app::RunningAppState,
-) {
-    let explorer = &state.tabs.explorer;
-    let mut lines: Vec<Line> = vec![
-        Line::from(format!("Source: {:?} | Filter: \"{}\" | Skip archived: {} | Skip forks: {}",
-            explorer.source, explorer.filter_text, explorer.skip_archived, explorer.skip_forks)),
-        Line::from(""),
-        Line::from(format!("  {:<4} {:<30} {:<15} {:>8}", "#", "Name", "Owner", "Status")),
-        Line::from(format!("  {:-<4} {:-<30} {:-<15} {:-<8}", "", "", "", "")),
-    ];
-
-    for (i, repo) in state.repos.iter().enumerate() {
-        if i >= 20 { break; }
-        let selected = if state.selected_indices.contains(&i) { "✓" } else { " " };
-        let status = match repo.clone_status {
-            git_vacuum_core::CloneStatus::Cloned => "cloned",
-            git_vacuum_core::CloneStatus::Stale => "stale",
-            git_vacuum_core::CloneStatus::Error => "error",
-            _ => "-",
-        };
-        lines.push(Line::from(format!(
-            "  [{:<1}] {:<30} {:<15} {:>8}",
-            selected,
-            truncate(&repo.name, 30),
-            truncate(&repo.owner_login, 15),
-            status,
-        )));
-    }
-
-    let block = Block::default().borders(Borders::ALL).title("Repository Explorer");
-    let p = Paragraph::new(lines).block(block);
-    frame.render_widget(p, area);
-}
-
-fn render_dashboard(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    state: &git_vacuum_app::RunningAppState,
-) {
-    let dash = &state.tabs.dashboard;
-    let lines = vec![
-        Line::from(""),
-        Line::from(format!("  Total repos:     {}", state.repos.len())),
-        Line::from(format!("  On disk:         {} ", git_vacuum_core::human_bytes(dash.total_size_bytes))),
-        Line::from(format!("  Up to date:      {}", dash.up_to_date)),
-        Line::from(format!("  Behind remote:   {}", dash.behind)),
-        Line::from(format!("  With errors:     {}", dash.errors)),
-        Line::from(""),
-        Line::from("  ── Repos Needing Attention ──"),
-    ];
-
-    let mut attention_lines = Vec::new();
-    for repo in &dash.attention_list {
-        attention_lines.push(Line::from(format!("    {}", repo.full_name)));
-    }
-    let all_lines: Vec<Line> = lines.into_iter().chain(attention_lines).collect();
-
-    let block = Block::default().borders(Borders::ALL).title("Dashboard");
-    let p = Paragraph::new(all_lines).block(block);
-    frame.render_widget(p, area);
-}
-
-fn render_sync_center(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    state: &git_vacuum_app::RunningAppState,
-) {
-    let sync = &state.tabs.sync_center;
-    let lines = match &sync.phase {
-        SyncPhase::Idle => vec![
-            Line::from(""),
-            Line::from("  No sync in progress."),
-            Line::from("  Go to Explorer, select repos, and press 's' to sync."),
-        ],
-        SyncPhase::PreSync { clone_count, sync_count } => vec![
-            Line::from(""),
-            Line::from(format!("  Repos to clone:  {}", clone_count)),
-            Line::from(format!("  Repos to sync:   {}", sync_count)),
-            Line::from(""),
-            Line::from("  Press Enter to start sync."),
-        ],
-        SyncPhase::Active => {
-            let mut lines = vec![
-                Line::from(""),
-                Line::from(format!("  Progress: {}/{} repos | {:.1}%",
-                    sync.progress_done, sync.progress_total,
-                    if sync.progress_total > 0 {
-                        (sync.progress_done as f32 / sync.progress_total as f32) * 100.0
-                    } else { 0.0 }
-                )),
-                Line::from(format!("  Data: {} transferred", git_vacuum_core::human_bytes(sync.bytes_done))),
-                Line::from(""),
-            ];
-            for entry in &sync.live_log {
-                let icon = match entry.status {
-                    LogEntryStatus::Success => "✓",
-                    LogEntryStatus::Failed => "✗",
-                    LogEntryStatus::Active => "⣾",
-                    LogEntryStatus::Queued => "—",
-                    LogEntryStatus::Skipped => "○",
-                };
-                lines.push(Line::from(format!("  {} {} — {}", icon, entry.repo_full_name, entry.detail)));
-            }
-            lines
+fn render_active_tab(f: &mut Frame, area: Rect, app: &App) {
+    let AppState::Running(state) = &app.state else { return };
+    let area = centered(area);
+    match state.active_tab {
+        git_vacuum_app::state::TabKind::Dashboard => {
+            render_dashboard(f, area, &state.tab_states.dashboard);
         }
-        SyncPhase::Paused => vec![
-            Line::from(""),
-            Line::from("  ⏸ Sync PAUSED"),
-            Line::from("  Press r to resume or c to cancel."),
-        ],
-        SyncPhase::Completed => vec![
-            Line::from(""),
-            Line::from("  ✓ Sync Complete!"),
-            Line::from(""),
-            Line::from(format!("  {}/{} repos processed successfully.",
-                sync.progress_done, sync.progress_total)),
-        ],
-        SyncPhase::Cancelled => vec![
-            Line::from(""),
-            Line::from("  Sync cancelled."),
-        ],
-    };
-
-    let block = Block::default().borders(Borders::ALL).title("Sync Center");
-    let p = Paragraph::new(lines).block(block);
-    frame.render_widget(p, area);
+        git_vacuum_app::state::TabKind::Explorer => {
+            render_explorer(f, area, &state.tab_states.explorer, &state.repos);
+        }
+        git_vacuum_app::state::TabKind::SyncCenter => {
+            render_sync_center(f, area, &state.tab_states.sync_center);
+        }
+        git_vacuum_app::state::TabKind::ActivityLog => {
+            render_activity_log(f, area, &state.tab_states.activity_log);
+        }
+        git_vacuum_app::state::TabKind::Settings => {
+            render_settings(f, area, &state.tab_states.settings);
+        }
+    }
 }
 
-fn render_activity_log(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    _state: &git_vacuum_app::RunningAppState,
-) {
-    let lines = vec![
-        Line::from(""),
-        Line::from("  No sync history yet."),
-        Line::from("  Run your first sync to see activity here."),
-    ];
-    let block = Block::default().borders(Borders::ALL).title("Activity Log");
-    let p = Paragraph::new(lines).block(block);
-    frame.render_widget(p, area);
+fn render_auth_screen(f: &mut Frame, area: Rect, app: &App) {
+    let AppState::Auth(auth) = &app.state else { return };
+    let area = centered(area);
+    render_auth(f, area, auth.mode, &auth.token_input, auth.error.as_deref(), auth.loading);
 }
 
-fn render_settings(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    _state: &git_vacuum_app::RunningAppState,
-) {
-    let lines = vec![
-        Line::from(""),
-        Line::from("  Settings will be available in v1.0"),
-        Line::from("  Configuration via CLI flags and environment variables for MVP."),
-    ];
-    let block = Block::default().borders(Borders::ALL).title("Settings");
-    let p = Paragraph::new(lines).block(block);
-    frame.render_widget(p, area);
-}
-
-fn centered_rect(percent_x: u16, height: u16, area: Rect) -> Rect {
-    let width = area.width * percent_x / 100;
-    let x = (area.width - width) / 2;
-    let y = (area.height - height) / 2;
-    Rect::new(x, y, width, height)
-}
-
-fn truncate(s: &str, max_width: usize) -> String {
-    if s.len() <= max_width {
-        s.to_string()
+fn centered(area: Rect) -> Rect {
+    if area.width < 80 {
+        area
     } else {
-        format!("{}...", &s[..max_width - 3])
+        let pad = (area.width - 80) / 2;
+        Rect {
+            x: area.x + pad,
+            y: area.y,
+            width: 80,
+            height: area.height,
+        }
     }
 }
+
+/// Render a centered modal overlay (used by help, error detail, etc.)
+#[allow(dead_code)]
+pub fn render_modal(f: &mut Frame, area: Rect, title: &str, body: &str) {
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = centered(area);
+    f.render_widget(Clear, inner);
+    let p = Paragraph::new(body)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(p, inner);
+}
+
+/// Draw a "loading" placeholder.
+#[allow(dead_code)]
+pub fn render_loading(f: &mut Frame, area: Rect, what: &str) {
+    let p = Paragraph::new(format!("  {what}..."))
+        .block(Block::default().borders(Borders::ALL))
+        .style(ratatui::style::Style::default().fg(COLOR_MUTED));
+    f.render_widget(p, area);
+}
+
+/// Color constants re-exported for testing/screens.
+pub use theme::{COLOR_ERROR, COLOR_SUCCESS, COLOR_WARNING};
+
+// Helper to drop the unused import warning for COLOR_PRIMARY in lib.rs
+#[allow(dead_code)]
+const _UNUSED: ratatui::style::Color = COLOR_PRIMARY;

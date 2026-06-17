@@ -3,12 +3,12 @@ name = "git-vacuum-keyring"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OS credential storage adapter for git-vacuum"
 
 [dependencies]
 git-vacuum-core = { path = "../git-vacuum-core" }
-keyring = "3"
-log.workspace = true
-thiserror.workspace = true
-
-async-trait = "0.1"
-
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "vendored"] }
+thiserror = { workspace = true }
+log = { workspace = true }

@@ -6,6 +6,48 @@
 
 ---
 
+## 0. Deployment Model
+
+**Git-Vacuum is a local-only application. There is no server component.**
+
+The runtime topology is exactly:
+
+```
+[TUI on user's machine]  ──HTTPS──▶  [GitHub REST API]
+       │
+       ├──▶ OS Keyring        (token)
+       ├──▶ SQLite file       (catalog + history, no secrets)
+       └──▶ ~/git-vacuum/     (filesystem, actual git clones)
+```
+
+There is **no intermediate server, proxy, webhook receiver, or cloud service**. The TUI binary is the only process the user runs. GitHub's REST API is the only outbound network dependency. All persistent state lives on the user's machine.
+
+**Consequences of this model:**
+
+- **No account system** — authentication is per-machine, per-OS-user via the OS keyring.
+- **No cross-device state** — running git-vacuum on a second machine means a second, independent installation.
+- **No multi-user collaboration** — each user runs their own binary against their own GitHub token.
+- **No server-side rate limit sharing** — each installation consumes its own GitHub API budget.
+- **No push notifications** — discovery and sync run on user demand or via OS-level schedulers (cron, launchd, Task Scheduler).
+- **The TUI is the entire UX** — there is no web UI, mobile app, or admin dashboard.
+
+**When a backend would become justified** (none of these apply today):
+
+| Trigger | Why we'd add one |
+|---|---|
+| Cross-device state sync (desktop + laptop share selection / history) | State divergence between machines becomes a real problem only at scale. |
+| Real-time webhook reactions (push events update the dashboard live) | Requires a public HTTPS endpoint, contradicting the local-only promise. |
+| Centralized team configuration (shared "what to back up" rules) | File-based YAML (`teams.yaml`) covers this without a server. |
+| Telemetry / usage analytics | Explicitly out of scope per UX Principle 6 ("Respect the terminal"). |
+
+If any of these triggers fire, the **hexagonal architecture (traits at infrastructure boundaries)** means a backend is a swap-in replacement, not a rewrite. `Database` becoming `RemoteDatabase` (HTTPS-backed), or a new `git-vacuum-web` binary sharing `git-vacuum-core` / `git-vacuum-db`, would not require touching the service or app layers.
+
+**Token storage contract** — the only piece of user-secret data is the GitHub PAT or OAuth access token. It lives exclusively in the OS keyring. See [git-vacuum-github-integration.md](./git-vacuum-github-integration.md) §2.6 for the full storage and security contract, and [no-backend-rationale.md](./no-backend-rationale.md) for the decision rationale.
+
+**Rationale for keeping it this way** is documented in [no-backend-rationale.md](./no-backend-rationale.md).
+
+---
+
 ## 1. Layered Architecture
 
 ```

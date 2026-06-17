@@ -3,13 +3,16 @@ name = "git-vacuum-git"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "git2-rs operations for git-vacuum"
 
 [dependencies]
 git-vacuum-core = { path = "../git-vacuum-core" }
-git2 = "0.19"
-tokio.workspace = true
-log.workspace = true
-thiserror.workspace = true
-
+git2 = { version = "0.19", features = ["vendored-libgit2"] }
+tokio = { workspace = true, features = ["sync", "process", "rt"] }
+log = { workspace = true }
+thiserror = { workspace = true }
 async-trait = "0.1"
-
+url = "2"
+parking_lot = "0.12"
