@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use git_vacuum_app::reduce;
-use git_vacuum_app::state::{AppState, AuthScreenState, RunningAppState, TabKind};
+use git_vacuum_app::state::{AppState, TabKind};
 use git_vacuum_app::App;
 use git_vacuum_core::{
     Action, AppEvent, AuthMethod, EventBus, Effect, EventBusHandle, RepoSource, UserInfo,
@@ -34,6 +34,12 @@ struct Args {
     #[arg(long)]
     sync: bool,
 
+    /// GitHub OAuth App client_id (required for browser sign-in)
+    /// Register an OAuth App at https://github.com/settings/applications/new
+    /// Set the callback URL to anything (device flow doesn't use it).
+    #[arg(long, env = "GIT_VACUUM_OAUTH_CLIENT_ID")]
+    oauth_client_id: Option<String>,
+
     /// Path to the database file
     #[arg(long, env = "GIT_VACUUM_DB")]
     db_path: Option<PathBuf>,
@@ -49,6 +55,10 @@ struct Args {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<()> {
+    // Load .env from the current working directory and the executable's
+    // directory. Missing file is OK — environment vars set in the shell
+    // already take precedence over .env values.
+    let _ = dotenvy::dotenv();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
 
@@ -72,8 +82,8 @@ async fn main() -> Result<()> {
         return run_headless_sync(services, args.token, clone_path, args.concurrency).await;
     }
 
-    // TUI mode
-    run_tui(services, db, clone_path, args.concurrency).await
+    // TUI mode (pass initial token if provided via --token)
+    run_tui(services, db, clone_path, args.concurrency, args.token, args.oauth_client_id).await
 }
 
 fn default_db_path() -> PathBuf {
@@ -133,9 +143,11 @@ async fn run_tui(
     db: Arc<SqliteDatabase>,
     clone_path: PathBuf,
     concurrency: usize,
+    initial_token: Option<String>,
+    oauth_client_id: Option<String>,
 ) -> Result<()> {
     let (bus, handle) = EventBus::new();
-    let mut app = App::new(services.clone(), handle);
+    let mut app = App::new(services.clone(), handle, oauth_client_id.clone());
 
     // Set the clone path into the running state
     if let AppState::Running(ref mut r) = app.state {
@@ -146,6 +158,22 @@ async fn run_tui(
     // Try loading stored credentials
     let services_for_load = services.clone();
     let bus_tx = bus.app_tx.clone();
+
+    // If --token was passed, store it in the keyring and treat as authenticated.
+    if let Some(token) = initial_token.as_deref() {
+        match git_vacuum_service::authenticate_pat(services.clone(), token).await {
+            Ok(info) => {
+                let _ = services.keyring.set_token(token);
+                let _ = services.db.upsert_account(&info);
+                app.reduce_event(AppEvent::AuthSucceeded { info });
+            }
+            Err(e) => {
+                log::warn!("--token auth failed: {e}");
+                // Fall through to load stored credentials or auth screen
+            }
+        }
+    }
+
     let user = git_vacuum_service::load_stored_credentials(services_for_load).await;
     match user {
         Ok(Some(info)) => {
@@ -180,6 +208,9 @@ async fn run_loop(
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(16));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut animation_tick = tokio::time::interval(Duration::from_millis(100));
+    animation_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_animation_tick: u64 = 0;
 
     loop {
         // 1. Drain background AppEvents
@@ -199,18 +230,48 @@ async fn run_loop(
         // 3. Render
         terminal.draw(|f| git_vacuum_tui::render(f, app))?;
 
-        // 4. Handle input + tick
+        // 4. Handle input + ticks
         tokio::select! {
             biased;
+            _ = animation_tick.tick() => {
+                last_animation_tick = last_animation_tick.wrapping_add(1);
+                app.tick_count = last_animation_tick;
+                app.reduce_event(AppEvent::Tick);
+            }
             _ = tick.tick() => {
-                app.tick_count = app.tick_count.wrapping_add(1);
+                // Redraw tick (16ms). We don't increment tick_count here
+                // so spinners stay at 100ms cadence; this tick is just for
+                // keeping the input event loop responsive.
             }
             maybe_event = events.next() => {
-                if let Some(Ok(CtEvent::Key(key))) = maybe_event {
-                    if key.kind == KeyEventKind::Press {
-                        if let Some(action) = key_to_action(key, app) {
-                            app.reduce(action);
+                match maybe_event {
+                    Some(Ok(CtEvent::Key(key))) => {
+                        if key.kind == KeyEventKind::Press {
+                            // On Windows, intercept Ctrl+V to read the clipboard
+                            // (Conhost does not support bracketed paste).
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && matches!(key.code, KeyCode::Char('v') | KeyCode::Char('V'))
+                            {
+                                if let Some(text) = read_clipboard() {
+                                    handle_paste(&text, app);
+                                }
+                            } else if let Some(action) = key_to_action(key, app) {
+                                app.reduce(action);
+                            }
                         }
+                    }
+                    Some(Ok(CtEvent::Paste(text))) => {
+                        // Bracketed paste: insert the full text in one action
+                        handle_paste(&text, app);
+                    }
+                    Some(Ok(CtEvent::Resize(_, _))) => {
+                        // Ratatui handles resize automatically; no action needed
+                    }
+                    Some(Ok(CtEvent::FocusGained | CtEvent::FocusLost | CtEvent::Mouse(_))) => {
+                        // Ignore focus/mouse events
+                    }
+                    Some(Err(_)) | None => {
+                        // Stream closed or error: just continue
                     }
                 }
             }
@@ -222,10 +283,62 @@ async fn run_loop(
     }
 }
 
+fn read_clipboard() -> Option<String> {
+    // Try to acquire the clipboard. If the lock times out, skip silently.
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    clipboard.get_text().ok()
+}
+
+fn handle_paste(text: &str, app: &mut App) {
+    // Strip whitespace, control chars, and the literal ^V (0x16) that some
+    // terminals emit when bracketed paste is unavailable. Also strip common
+    // shell-paste artifacts like the trailing newline Windows adds.
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !c.is_control() && !c.is_whitespace())
+        .collect();
+
+    if cleaned.is_empty() {
+        return;
+    }
+
+    match &mut app.state {
+        AppState::Auth(auth) if !auth.loading => {
+            let mut new_buf = auth.token_input.clone();
+            new_buf.push_str(&cleaned);
+            app.reduce(Action::AuthTokenInputChanged(new_buf));
+        }
+        AppState::Running(state) => {
+            // Route to whatever input is focused: filter / org input / topic filter
+            if state.command_palette.is_some() {
+                if let Some(p) = state.command_palette.as_mut() {
+                    let mut new_input = p.input.clone();
+                    new_input.push_str(&cleaned);
+                    app.reduce(Action::CommandPaletteFilter(new_input));
+                }
+            } else {
+                // Explorer filter is the most common paste target
+                let mut new_filter = state.tab_states.explorer.filter_text.clone();
+                new_filter.push_str(&cleaned);
+                app.reduce(Action::ExplorerSetFilter(new_filter));
+            }
+        }
+        _ => {}
+    }
+}
+
 fn key_to_action(key: KeyEvent, app: &mut App) -> Option<Action> {
     // Global
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return Some(Action::Quit);
+    }
+    // In Auth state, Esc behavior depends on the current phase — we
+    // route it through key_to_action_auth below by intercepting the
+    // global DismissModal match.
+    if let AppState::Auth(_) = &app.state {
+        if key.code == KeyCode::Esc {
+            return key_to_action_auth(key, app);
+        }
     }
     match key.code {
         KeyCode::Char('q') => return Some(Action::Quit),
@@ -249,34 +362,129 @@ fn key_to_action(key: KeyEvent, app: &mut App) -> Option<Action> {
     };
 
     if state_kind == 0 {
-        let token_input = if let AppState::Auth(a) = &app.state { a.token_input.clone() } else { String::new() };
-        let loading = if let AppState::Auth(a) = &app.state { a.loading } else { false };
-        key_to_action_auth(key, &token_input, loading)
+        if let AppState::Auth(_) = &app.state {
+            key_to_action_auth(key, app)
+        } else {
+            None
+        }
     } else {
         key_to_action_running(key, app)
     }
 }
 
-fn key_to_action_auth(key: KeyEvent, token_input: &str, loading: bool) -> Option<Action> {
-    if loading {
-        // Ignore input while a request is in flight
-        return None;
-    }
-    match key.code {
-        KeyCode::Enter => Some(Action::AuthSubmitToken(token_input.to_string())),
-        KeyCode::Backspace => {
-            let mut s = token_input.to_string();
-            s.pop();
-            Some(Action::AuthTokenInputChanged(s))
+fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
+    let AppState::Auth(auth) = &app.state else { return None };
+
+    use git_vacuum_app::state::{AuthMethodChoice, AuthPhase};
+
+    match auth.phase {
+        AuthPhase::MethodPicker => {
+            // Cursor navigation + selection.
+            match key.code {
+                KeyCode::Up => return Some(Action::AuthMethodCursorMoved(-1)),
+                KeyCode::Down => return Some(Action::AuthMethodCursorMoved(1)),
+                KeyCode::Char('1') => {
+                    return Some(Action::AuthMethodSelected(AuthMethodChoice::Pat))
+                }
+                KeyCode::Char('2') => {
+                    return Some(Action::AuthMethodSelected(AuthMethodChoice::OAuth))
+                }
+                KeyCode::Char('3') => {
+                    return Some(Action::AuthMethodSelected(AuthMethodChoice::GhCli))
+                }
+                KeyCode::Enter => {
+                    let method = match auth.method_cursor {
+                        0 => AuthMethodChoice::Pat,
+                        1 => AuthMethodChoice::OAuth,
+                        _ => AuthMethodChoice::GhCli,
+                    };
+                    return Some(Action::AuthMethodSelected(method));
+                }
+                KeyCode::Esc | KeyCode::Char('q') => return Some(Action::Quit),
+                _ => return None,
+            }
         }
-        KeyCode::Char(c) => {
-            let mut s = token_input.to_string();
-            s.push(c);
-            Some(Action::AuthTokenInputChanged(s))
+        AuthPhase::PatInput => {
+            // Allow Esc to go back to the picker.
+            if key.code == KeyCode::Esc {
+                return Some(Action::AuthBackToMethodPicker);
+            }
+            // 'o' jumps to OAuth activation (preserved from the old UX).
+            if matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+                return Some(Action::AuthStartOAuth);
+            }
+            // 'p' is a no-op (we're already in PAT input).
+            if matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P')) {
+                return Some(Action::AuthStartPAT);
+            }
+            // While a request is in-flight, swallow everything but Esc.
+            if auth.loading {
+                return None;
+            }
+            match key.code {
+                KeyCode::Enter => {
+                    Some(Action::AuthSubmitToken(auth.token_input.clone()))
+                }
+                KeyCode::Backspace => {
+                    let mut s = auth.token_input.clone();
+                    s.pop();
+                    Some(Action::AuthTokenInputChanged(s))
+                }
+                KeyCode::Char(c) => {
+                    if c.is_control() || c == '\u{16}' {
+                        return None;
+                    }
+                    let mut s = auth.token_input.clone();
+                    s.push(c);
+                    Some(Action::AuthTokenInputChanged(s))
+                }
+                _ => None,
+            }
         }
-        _ => None,
+        AuthPhase::Validating => {
+            // During a validating request, allow Esc to cancel.
+            if key.code == KeyCode::Esc {
+                return Some(Action::AuthBackToMethodPicker);
+            }
+            None
+        }
+        AuthPhase::DeviceActivation => {
+            if key.code == KeyCode::Esc {
+                return Some(Action::AuthBackToMethodPicker);
+            }
+            if key.code == KeyCode::Enter {
+                return Some(Action::AuthStartOAuthNow);
+            }
+            // 'c' / 'o' are reserved shortcuts shown in the key bar; they
+            // don't do anything in this iteration but reserving them keeps
+            // the keymap stable.
+            None
+        }
+        AuthPhase::AuthFailed => {
+            match key.code {
+                KeyCode::Esc => return Some(Action::AuthBackToMethodPicker),
+                KeyCode::Tab | KeyCode::Right => {
+                    return Some(Action::AuthFailedFocusMoved(1))
+                }
+                KeyCode::BackTab | KeyCode::Left => {
+                    return Some(Action::AuthFailedFocusMoved(-1))
+                }
+                KeyCode::Enter => {
+                    if auth.failed_focus == 0 {
+                        // Try Again — re-activate the last method.
+                        return Some(Action::AuthMethodSelected(auth.last_method));
+                    } else {
+                        // Pick a different method.
+                        return Some(Action::AuthBackToMethodPicker);
+                    }
+                }
+                _ => return None,
+            }
+        }
     }
 }
+
+// Convenience alias for borrowing the AuthScreenState without taking ownership.
 
 fn key_to_action_running(key: KeyEvent, app: &mut App) -> Option<Action> {
     let AppState::Running(state) = &mut app.state else { return None };
@@ -290,6 +498,20 @@ fn key_to_action_running(key: KeyEvent, app: &mut App) -> Option<Action> {
             KeyCode::Enter => Some(Action::ConfirmModal),
             _ => None,
         };
+    }
+
+    // Welcome screen: any keypress dismisses it (we don't forward the key)
+    if state.welcome_state.is_some() {
+        return Some(Action::DismissWelcome);
+    }
+
+    // Number keys jump directly to a tab
+    if let KeyCode::Char(c) = key.code {
+        if let Some(n) = c.to_digit(10) {
+            if (1..=5).contains(&n) {
+                return Some(Action::SwitchTabByNumber(n as u8));
+            }
+        }
     }
 
     match state.active_tab {
@@ -367,13 +589,123 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                 }
             });
         }
-        Effect::StartOAuthDeviceFlow { .. } => {
-            let _ = app_tx.send(AppEvent::AuthFailed {
-                reason: "not_implemented".into(),
-                detail: "OAuth device flow is not yet implemented in MVP".into(),
+        Effect::StartOAuthDeviceFlow { client_id: _, scopes: _ } => {
+            let services2 = services.clone();
+            let app_tx2 = app_tx.clone();
+            let client_id_owned = app.oauth_client_id.clone().unwrap_or_default();
+            tokio::spawn(async move {
+                match git_vacuum_service::start_oauth_device_flow(services2, &client_id_owned).await {
+                    Ok(init) => {
+                        let _ = app_tx2.send(AppEvent::OAuthCodeReceived {
+                            user_code: init.user_code,
+                            verification_uri: init.verification_uri,
+                            expires_in: init.expires_in,
+                        });
+                        // Spawn a poller that fires every 5s
+                        let services3 = services.clone();
+                        let app_tx3 = app_tx2.clone();
+                        let device_code = init.device_code;
+                        let interval_secs = init.interval.as_secs().max(5);
+                        let expires_in = init.expires_in;
+                        let client_id_for_poll = client_id_owned.clone();
+                        tokio::spawn(async move {
+                            let start = std::time::Instant::now();
+                            loop {
+                                tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+                                if start.elapsed() > expires_in {
+                                    let _ = app_tx3.send(AppEvent::OAuthTimeout);
+                                    break;
+                                }
+                                match git_vacuum_service::poll_oauth_device_flow(
+                                    services3.clone(),
+                                    &client_id_for_poll,
+                                    device_code.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(git_vacuum_core::DeviceFlowPoll::Success { access_token, scopes }) => {
+                                        let _ = app_tx3.send(AppEvent::OAuthTokenReceived { token: access_token, scopes });
+                                        break;
+                                    }
+                                    Ok(git_vacuum_core::DeviceFlowPoll::SlowDown { new_interval }) => {
+                                        // Use new interval next iteration
+                                        let extra = new_interval.as_secs().saturating_sub(interval_secs);
+                                        if extra > 0 {
+                                            tokio::time::sleep(std::time::Duration::from_secs(extra)).await;
+                                        }
+                                    }
+                                    Ok(git_vacuum_core::DeviceFlowPoll::Expired) => {
+                                        let _ = app_tx3.send(AppEvent::OAuthTimeout);
+                                        break;
+                                    }
+                                    Ok(git_vacuum_core::DeviceFlowPoll::AccessDenied) => {
+                                        let _ = app_tx3.send(AppEvent::AuthFailed {
+                                            reason: "access_denied".into(),
+                                            detail: "OAuth authorization was denied".into(),
+                                        });
+                                        break;
+                                    }
+                                    Ok(git_vacuum_core::DeviceFlowPoll::Pending) => {
+                                        // Keep polling
+                                    }
+                                    Err(e) => {
+                                        // Network blip or OAuth error. Show in
+                                        // the TUI; if it's a config error (bad
+                                        // client_id etc.) the user needs to know.
+                                        let msg = format!("{e}");
+                                        let permanent = msg.contains("client_id")
+                                            || msg.contains("HTTP 4")
+                                            || msg.contains("invalid_client")
+                                            || msg.contains("incorrect_client");
+                                        if permanent {
+                                            let _ = app_tx3.send(AppEvent::AuthFailed {
+                                                reason: "oauth_poll_failed".into(),
+                                                detail: msg,
+                                            });
+                                            break;
+                                        } else {
+                                            log::warn!("OAuth poll error (will retry): {e}");
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        let _ = app_tx2.send(AppEvent::AuthFailed {
+                            reason: "oauth_init_failed".into(),
+                            detail: format!("Could not start OAuth flow: {e}"),
+                        });
+                    }
+                }
             });
         }
-        Effect::PollOAuthToken { .. } | Effect::CancelOAuth => { /* no-op */ }
+        Effect::PollOAuthToken { client_id: _, device_code: _, interval } => {
+            // Deprecated: handled inline in StartOAuthDeviceFlow
+            let _ = interval;
+        }
+        Effect::CancelOAuth => {
+            // No-op: the poller exits naturally when it can't find the device
+            // code (after deletion) or on user action. We don't expose a
+            // cancel endpoint in the github API.
+        }
+        Effect::CompleteOAuthWithToken { token } => {
+            let services2 = services.clone();
+            let app_tx2 = app_tx.clone();
+            tokio::spawn(async move {
+                match git_vacuum_service::complete_oauth_with_token(services2, token).await {
+                    Ok(info) => {
+                        let _ = app_tx2.send(AppEvent::AuthSucceeded { info });
+                    }
+                    Err(e) => {
+                        let _ = app_tx2.send(AppEvent::AuthFailed {
+                            reason: "oauth_validate_failed".into(),
+                            detail: format!("OAuth token invalid: {e}"),
+                        });
+                    }
+                }
+            });
+        }
         Effect::LoadStoredCredentials => {
             tokio::spawn(async move {
                 if let Ok(Some(info)) = git_vacuum_service::load_stored_credentials(services).await {
@@ -500,11 +832,30 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
             let services2 = services.clone();
             let app_tx2 = app_tx.clone();
             tokio::spawn(async move {
-                if let Ok(stats) = git_vacuum_service::compute_stats(services2).await {
-                    let _ = app_tx2.send(AppEvent::StatsRefreshed);
-                    // For MVP, send a follow-up to push the stats into the dashboard tab.
-                    // (In a fuller impl, we'd send a dedicated DashboardStatsUpdated event.)
-                    let _ = stats;
+                let stats = git_vacuum_service::compute_stats(services2.clone()).await;
+                let attention = services2
+                    .db
+                    .get_attention_list(10)
+                    .unwrap_or_default();
+                match stats {
+                    Ok(s) => {
+                        let _ = app_tx2.send(AppEvent::DashboardStatsUpdated { stats: s, attention });
+                    }
+                    Err(e) => {
+                        // Even on failure, send a zeroed stats to clear loading state
+                        // so the UI doesn't stay stuck on "Loading stats..."
+                        log::warn!("Failed to compute dashboard stats: {e}");
+                        let _ = app_tx2.send(AppEvent::DashboardStatsUpdated {
+                            stats: git_vacuum_core::DashboardStats {
+                                total_repos: 0,
+                                up_to_date: 0,
+                                behind: 0,
+                                errors: 0,
+                                total_size_bytes: 0,
+                            },
+                            attention: vec![],
+                        });
+                    }
                 }
             });
         }

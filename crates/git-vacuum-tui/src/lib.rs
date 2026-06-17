@@ -4,13 +4,14 @@ pub mod screens;
 pub mod terminal;
 pub mod theme;
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use git_vacuum_app::state::AppState;
+use git_vacuum_app::state::{AppState, RunningAppState};
 use git_vacuum_app::App;
-use crate::components::{key_bar, tab_bar, title_bar};
+use crate::components::{activity_banner, key_bar, tab_bar, title_bar};
 use crate::layout::shell_layout;
 use crate::screens::activity_log::render_activity_log;
 use crate::screens::auth::render_auth;
@@ -18,12 +19,31 @@ use crate::screens::dashboard::render_dashboard;
 use crate::screens::explorer::render_explorer;
 use crate::screens::settings::render_settings;
 use crate::screens::sync_center::render_sync_center;
-use crate::theme::{COLOR_MUTED, COLOR_PRIMARY};
+use crate::screens::welcome::render_welcome as render_welcome_screen;
+use crate::theme::{COLOR_BG_BANNER, COLOR_MUTED, COLOR_PRIMARY};
 
 /// Main entry point: render the entire UI for the current app state.
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
-    let chunks = shell_layout(area);
+    let tick = app.tick_count;
+
+    // Welcome screen takes over the entire area when active
+    if let AppState::Running(r) = &app.state {
+        if r.welcome_state.is_some() {
+            render_welcome(f, area, r, tick);
+            return;
+        }
+    }
+
+    // Auth state gets its own dedicated layout — no title bar, no tab bar.
+    // This avoids the "loading stats" garbage and gives the input full focus.
+    if let AppState::Auth(_) = &app.state {
+        render_auth_full(f, area, app, tick);
+        return;
+    }
+
+    let show_banner = matches!(&app.state, AppState::Running(r) if r.loading.anything_pending());
+    let chunks = shell_layout(area, show_banner);
 
     // Title bar
     let user = match &app.state {
@@ -34,26 +54,37 @@ pub fn render(f: &mut Frame, app: &App) {
         AppState::Running(r) => r.tab_states.dashboard.stats.as_ref(),
         _ => None,
     };
-    let title_lines = title_bar(user, stats);
-    let title_widget = Paragraph::new(title_lines)
-        .block(Block::default().borders(Borders::BOTTOM));
+    let title_lines = title_bar(user, stats, tick);
+    let title_widget = Paragraph::new(title_lines);
     f.render_widget(title_widget, chunks[0]);
 
     // Tab bar (only when running)
+    let mut next_chunk_idx = 1;
     match &app.state {
         AppState::Running(r) => {
-            let tab_line = tab_bar(r.active_tab);
-            let tab_widget = Paragraph::new(tab_line)
-                .block(Block::default().borders(Borders::BOTTOM));
-            f.render_widget(tab_widget, chunks[1]);
+            let tab_line = tab_bar(r.active_tab, r.loading.repos, tick);
+            let tab_widget = Paragraph::new(tab_line);
+            f.render_widget(tab_widget, chunks[next_chunk_idx]);
+            next_chunk_idx += 1;
+
+            // Activity banner
+            if show_banner {
+                if let Some(banner) = activity_banner(&r.loading, tick) {
+                    let widget = Paragraph::new(banner)
+                        .style(Style::default().bg(COLOR_BG_BANNER));
+                    f.render_widget(widget, chunks[next_chunk_idx]);
+                }
+                next_chunk_idx += 1;
+            }
 
             // Main content per active tab
-            render_active_tab(f, chunks[2], app);
+            render_active_tab(f, chunks[next_chunk_idx], app, tick);
+            next_chunk_idx += 1;
 
             // Key bar
             let bindings: Vec<(&str, &str)> = match r.active_tab {
                 git_vacuum_app::state::TabKind::Dashboard => vec![
-                    ("r", "refresh"), ("s", "sync"), ("?", "help"), ("q", "quit"),
+                    ("r", "refresh"), ("s", "sync"), ("?", "help"), ("1-5", "tab"), ("q", "quit"),
                 ],
                 git_vacuum_app::state::TabKind::Explorer => vec![
                     ("↑↓", "navigate"), ("Space", "toggle"), ("Enter", "sync"),
@@ -72,42 +103,75 @@ pub fn render(f: &mut Frame, app: &App) {
                 ],
             };
             f.render_widget(
-                Paragraph::new(key_bar(&bindings))
-                    .block(Block::default().borders(Borders::TOP)),
-                chunks[3],
-            );
-        }
-        AppState::Auth(_) => {
-            // No tab bar; render auth screen
-            render_auth_screen(f, chunks[2], app);
-            let bindings: Vec<(&str, &str)> = vec![("Enter", "submit"), ("Esc", "quit")];
-            f.render_widget(
-                Paragraph::new(key_bar(&bindings))
-                    .block(Block::default().borders(Borders::TOP)),
-                chunks[3],
+                Paragraph::new(key_bar(&bindings)),
+                chunks[next_chunk_idx],
             );
         }
         AppState::FatalError(msg) => {
             let p = Paragraph::new(format!("\n  FATAL: {msg}\n\n  Press q to quit."))
                 .block(Block::default().borders(Borders::ALL))
                 .wrap(Wrap { trim: false });
-            f.render_widget(p, chunks[2]);
+            f.render_widget(p, chunks[next_chunk_idx]);
+        }
+        AppState::Auth(_) => {
+            // Unreachable: handled by early return in render()
         }
     }
 }
 
-fn render_active_tab(f: &mut Frame, area: Rect, app: &App) {
+fn render_auth_full(f: &mut Frame, area: Rect, app: &App, tick: u64) {
+    let AppState::Auth(auth) = &app.state else { return };
+    // Use Percentage-based constraints so the layout adapts to any terminal
+    // height. The auth panel + key bar takes the central portion; spacers
+    // above and below absorb the rest.
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(30), // spacer top
+            Constraint::Length(20),     // auth panel (max 20 rows)
+            Constraint::Length(1),      // key bar
+            Constraint::Percentage(30), // spacer bottom (absorbs remaining)
+        ])
+        .split(area);
+    // Clamp panel height to fit the available area
+    let middle = chunks[1];
+    let available_h = middle.height.min(20);
+    let panel_w = middle.width.min(70);
+    let panel_x_offset = (middle.width.saturating_sub(panel_w)) / 2;
+    let panel = Rect {
+        x: middle.x + panel_x_offset,
+        y: middle.y,
+        width: panel_w,
+        height: available_h.max(8),
+    };
+    render_auth(f, panel, auth, tick);
+
+    // Key bar at the bottom of the auth layout
+    let bindings: Vec<(&str, &str)> = if auth.loading {
+        vec![("Esc", "cancel")]
+    } else if auth.token_input.is_empty() {
+        vec![("Enter", "submit"), ("Esc", "quit")]
+    } else {
+        vec![("Enter", "submit"), ("Backspace", "delete"), ("Esc", "clear+quit")]
+    };
+    f.render_widget(
+        Paragraph::new(key_bar(&bindings)),
+        chunks[2],
+    );
+}
+
+fn render_active_tab(f: &mut Frame, area: Rect, app: &App, tick: u64) {
     let AppState::Running(state) = &app.state else { return };
     let area = centered(area);
     match state.active_tab {
         git_vacuum_app::state::TabKind::Dashboard => {
-            render_dashboard(f, area, &state.tab_states.dashboard);
+            render_dashboard(f, area, &state.tab_states.dashboard, tick);
         }
         git_vacuum_app::state::TabKind::Explorer => {
-            render_explorer(f, area, &state.tab_states.explorer, &state.repos);
+            render_explorer(f, area, &state.tab_states.explorer, &state.repos, tick);
         }
         git_vacuum_app::state::TabKind::SyncCenter => {
-            render_sync_center(f, area, &state.tab_states.sync_center);
+            render_sync_center(f, area, &state.tab_states.sync_center, tick);
         }
         git_vacuum_app::state::TabKind::ActivityLog => {
             render_activity_log(f, area, &state.tab_states.activity_log);
@@ -118,10 +182,9 @@ fn render_active_tab(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-fn render_auth_screen(f: &mut Frame, area: Rect, app: &App) {
-    let AppState::Auth(auth) = &app.state else { return };
-    let area = centered(area);
-    render_auth(f, area, auth.mode, &auth.token_input, auth.error.as_deref(), auth.loading);
+fn render_welcome(f: &mut Frame, area: Rect, state: &RunningAppState, tick: u64) {
+    let welcome = state.welcome_state.as_ref().expect("welcome_state must be Some");
+    render_welcome_screen(f, area, &welcome.user, welcome.repos_count, welcome.phase, tick);
 }
 
 fn centered(area: Rect) -> Rect {

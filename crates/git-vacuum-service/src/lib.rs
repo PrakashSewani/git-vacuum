@@ -88,6 +88,32 @@ pub async fn logout(services: Arc<Services>) -> Result<(), git_vacuum_core::Keyr
     auth_service::logout(services).await
 }
 
+pub async fn start_oauth_device_flow(
+    services: Arc<Services>,
+    client_id: &str,
+) -> Result<git_vacuum_core::DeviceFlowInit, git_vacuum_core::AuthError> {
+    auth_service::start_oauth_device_flow(services, client_id).await
+}
+
+pub async fn poll_oauth_device_flow(
+    services: Arc<Services>,
+    client_id: &str,
+    device_code: String,
+) -> Result<git_vacuum_core::DeviceFlowPoll, git_vacuum_core::AuthError> {
+    auth_service::poll_oauth_device_flow(services, client_id, device_code).await
+}
+
+pub async fn complete_oauth_with_token(
+    services: Arc<Services>,
+    token: String,
+) -> Result<UserInfo, git_vacuum_core::AuthError> {
+    auth_service::complete_oauth_with_token(services, token).await
+}
+
+pub fn oauth_poll_interval() -> std::time::Duration {
+    auth_service::default_poll_interval()
+}
+
 pub async fn compute_stats(
     services: Arc<Services>,
 ) -> Result<git_vacuum_core::DashboardStats, git_vacuum_core::DbError> {

@@ -31,13 +31,20 @@ pub enum Action {
     SwitchTab(TabTarget),
     NextTab,
     PrevTab,
+    SwitchTabByNumber(u8),
+    DismissWelcome,
 
     AuthSubmitToken(String),
     AuthTokenInputChanged(String),
     AuthStartOAuth,
+    AuthStartOAuthNow,
     AuthStartPAT,
     AuthCancelOAuth,
     AuthSkipForPublic,
+    AuthMethodSelected(AuthMethodChoice),
+    AuthBackToMethodPicker,
+    AuthMethodCursorMoved(i8),
+    AuthFailedFocusMoved(i8),
 
     ExplorerToggle(usize),
     ExplorerSelectAll,
@@ -104,6 +111,14 @@ pub enum TabTarget {
     Settings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum AuthMethodChoice {
+    #[default]
+    Pat,
+    OAuth,
+    GhCli,
+}
+
 #[derive(Debug, Clone)]
 pub enum AppEvent {
     AuthSucceeded { info: UserInfo },
@@ -133,6 +148,12 @@ pub enum AppEvent {
 
     StatsRefreshed,
     ReposLoaded { entries: Vec<RepoEntry> },
+    DashboardStatsUpdated {
+        stats: crate::DashboardStats,
+        attention: Vec<crate::AttentionItem>,
+    },
+    Tick,
+    WelcomeAdvanced,
     FatalError { message: String },
 }
 
@@ -142,6 +163,7 @@ pub enum Effect {
     StartOAuthDeviceFlow { client_id: String, scopes: Vec<String> },
     PollOAuthToken { client_id: String, device_code: String, interval: Duration },
     CancelOAuth,
+    CompleteOAuthWithToken { token: String },
     LoadStoredCredentials,
     Logout,
 

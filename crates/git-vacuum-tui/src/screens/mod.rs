@@ -4,3 +4,4 @@ pub mod dashboard;
 pub mod explorer;
 pub mod settings;
 pub mod sync_center;
+pub mod welcome;

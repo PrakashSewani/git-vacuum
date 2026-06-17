@@ -30,6 +30,21 @@ impl OctocrabGithubApi {
         }
     }
 
+    /// The OAuth device-flow and access-token endpoints live on the main
+    /// GitHub web host (https://github.com), NOT on the REST API host
+    /// (https://api.github.com). When the configured base URL is the API
+    /// host (the default), we transparently swap it for the OAuth calls.
+    /// For GitHub Enterprise, the user supplies a custom base_url like
+    /// `https://github.acme.com` which serves both — in that case this
+    /// function returns it unchanged.
+    fn oauth_base_url(&self) -> String {
+        if self.base_url.contains("api.github.com") {
+            "https://github.com".to_string()
+        } else {
+            self.base_url.clone()
+        }
+    }
+
     fn unauth_client(&self) -> Result<Octocrab, AuthError> {
         if let Some(c) = self.client.lock().clone() {
             return Ok(c);
@@ -142,17 +157,47 @@ impl GithubApi for OctocrabGithubApi {
         let client = reqwest::Client::new();
         let scope = scopes.join(" ");
         let res = client
-            .post(format!("{}/login/device/code", self.base_url))
+            .post(format!("{}/login/device/code", self.oauth_base_url()))
             .header("Accept", "application/json")
             .header("User-Agent", &self.user_agent)
             .form(&[("client_id", client_id), ("scope", &scope)])
             .send()
             .await
             .map_err(|e| AuthError::Network(e.to_string()))?;
+
+        // Check HTTP status — GitHub returns 4xx for OAuth errors with the
+        // body containing { "error": "...", "error_description": "..." }
+        let status = res.status();
         let body: serde_json::Value = res
             .json()
             .await
             .map_err(|e| AuthError::Internal(format!("json: {e}")))?;
+
+        if let Some(err) = body["error"].as_str() {
+            let desc = body["error_description"].as_str().unwrap_or("(no description)");
+            return Err(match err {
+                "incorrect_client_credentials" | "invalid_client" => {
+                    AuthError::Internal(format!(
+                        "OAuth client_id invalid: {desc}. Register at https://github.com/settings/applications/new"
+                    ))
+                }
+                "unauthorized_client" => AuthError::Internal(format!(
+                    "OAuth client_id not authorized for device flow: {desc}"
+                )),
+                "unsupported_grant_type" | "invalid_request" => {
+                    AuthError::Internal(format!("OAuth init rejected: {desc}"))
+                }
+                _ => AuthError::Internal(format!("OAuth init error ({err}): {desc}")),
+            });
+        }
+        if !status.is_success() {
+            return Err(AuthError::Internal(format!(
+                "OAuth init HTTP {}: {}",
+                status,
+                body.to_string()
+            )));
+        }
+
         Ok(DeviceFlowInit {
             device_code: body["device_code"].as_str().unwrap_or_default().to_string(),
             user_code: body["user_code"].as_str().unwrap_or_default().to_string(),
@@ -169,7 +214,7 @@ impl GithubApi for OctocrabGithubApi {
     ) -> Result<DeviceFlowPoll, AuthError> {
         let client = reqwest::Client::new();
         let res = client
-            .post(format!("{}/login/oauth/access_token", self.base_url))
+            .post(format!("{}/login/oauth/access_token", self.oauth_base_url()))
             .header("Accept", "application/json")
             .header("User-Agent", &self.user_agent)
             .form(&[
@@ -180,11 +225,25 @@ impl GithubApi for OctocrabGithubApi {
             .send()
             .await
             .map_err(|e| AuthError::Network(e.to_string()))?;
+
+        let status = res.status();
         let body: serde_json::Value = res
             .json()
             .await
             .map_err(|e| AuthError::Internal(format!("json: {e}")))?;
-        match body["error"].as_str() {
+
+        // GitHub can return errors as either { "error": "...", ... } or
+        // 4xx with { "message": "...", "documentation_url": "..." }.
+        // Handle both.
+        let err_str = body["error"].as_str();
+        let desc_str = body["error_description"].as_str()
+            .or_else(|| body["message"].as_str())
+            .unwrap_or("");
+        if let Some(err) = err_str {
+            log::debug!("OAuth poll error: {err} — {desc_str}");
+        }
+
+        match err_str {
             Some("authorization_pending") => Ok(DeviceFlowPoll::Pending),
             Some("slow_down") => {
                 let new_interval = std::time::Duration::from_secs(body["interval"].as_u64().unwrap_or(10));
@@ -192,9 +251,32 @@ impl GithubApi for OctocrabGithubApi {
             }
             Some("expired_token") => Ok(DeviceFlowPoll::Expired),
             Some("access_denied") => Ok(DeviceFlowPoll::AccessDenied),
-            Some(other) => Err(AuthError::Internal(format!("oauth error: {other}"))),
+            Some("incorrect_client_credentials") | Some("invalid_client") => {
+                Err(AuthError::Internal(format!(
+                    "OAuth client_id invalid: {desc_str}. Register at https://github.com/settings/applications/new"
+                )))
+            }
+            Some("unsupported_grant_type") | Some("invalid_grant") => {
+                Err(AuthError::Internal(format!(
+                    "OAuth grant rejected: {desc_str}"
+                )))
+            }
+            Some(other) => Err(AuthError::Internal(format!(
+                "oauth error: {other} — {desc_str} (HTTP {status})"
+            ))),
             None => {
-                let token = body["access_token"].as_str().ok_or_else(|| AuthError::Internal("missing access_token".into()))?.to_string();
+                if !status.is_success() {
+                    return Err(AuthError::Internal(format!(
+                        "OAuth poll HTTP {status}: {}",
+                        if desc_str.is_empty() { body.to_string() } else { desc_str.to_string() }
+                    )));
+                }
+                let token = body["access_token"].as_str().ok_or_else(|| {
+                    AuthError::Internal(format!(
+                        "OAuth poll: success response missing access_token. Body: {}",
+                        body
+                    ))
+                })?.to_string();
                 let scope_str = body["scope"].as_str().unwrap_or("");
                 let scopes: Vec<String> = scope_str.split_whitespace().map(|s| s.to_string()).collect();
                 Ok(DeviceFlowPoll::Success { access_token: token, scopes })

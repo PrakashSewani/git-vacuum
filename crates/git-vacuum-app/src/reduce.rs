@@ -2,11 +2,14 @@
 //! These are pure-ish: they take `&mut App` and return `Vec<Effect>`.
 //! They never `.await` — async work happens in spawned effect tasks.
 
-use git_vacuum_core::{Action, AppEvent, Effect, JobId, RepoSource, TabTarget};
+use git_vacuum_core::{Action, AppEvent, AuthMethodChoice, Effect, JobId, RepoSource, TabTarget};
 use git_vacuum_service::{authenticate_pat, load_stored_credentials, logout, run_discovery};
 
 use crate::modals::{CommandAction, CommandPaletteState, Modal};
-use crate::state::{AppState, AuthMode, AuthScreenState, RunningAppState, TabKind};
+use crate::state::{
+    AppState, AuthErrorCategory, AuthErrorView, AuthMode, AuthPhase, AuthScreenState,
+    RunningAppState, TabKind, WelcomePhase,
+};
 use crate::tabs::LogStatus;
 use crate::App;
 
@@ -32,40 +35,154 @@ fn reduce_in_state(app: &mut App, action: Action) -> Vec<Effect> {
 fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
     let AppState::Auth(auth) = &mut app.state else { return vec![] };
     match action {
+        Action::AuthMethodCursorMoved(delta) => {
+            // 3 methods, wrap. GhCli is shown disabled; cursor still moves
+            // so the user can see it, but selection is a no-op.
+            let total = 3i8;
+            let mut cur = auth.method_cursor as i8 + delta;
+            if cur < 0 {
+                cur += total;
+            } else if cur >= total {
+                cur -= total;
+            }
+            auth.method_cursor = cur as u8;
+            vec![]
+        }
+        Action::AuthFailedFocusMoved(delta) => {
+            // 2 buttons: 0 = Try Again, 1 = Pick a different method.
+            let total = 2i8;
+            let mut cur = auth.failed_focus as i8 + delta;
+            if cur < 0 {
+                cur += total;
+            } else if cur >= total {
+                cur -= total;
+            }
+            auth.failed_focus = cur as u8;
+            vec![]
+        }
+        Action::AuthMethodSelected(method) => {
+            match method {
+                AuthMethodChoice::Pat => {
+                    auth.method = AuthMethodChoice::Pat;
+                    auth.last_method = AuthMethodChoice::Pat;
+                    auth.mode = AuthMode::Pat;
+                    auth.phase = AuthPhase::PatInput;
+                    auth.error = None;
+                }
+                AuthMethodChoice::OAuth => {
+                    auth.method = AuthMethodChoice::OAuth;
+                    auth.last_method = AuthMethodChoice::OAuth;
+                    auth.mode = AuthMode::OAuth;
+                    auth.phase = AuthPhase::DeviceActivation;
+                    auth.error = None;
+                }
+                AuthMethodChoice::GhCli => {
+                    // No service plumbing in this iteration; show an error
+                    // hint on the picker.
+                    auth.error = Some(AuthErrorView {
+                        category: AuthErrorCategory::Other,
+                        headline: "gh CLI integration coming soon".into(),
+                        detail: "git-vacuum can read tokens from the gh CLI, but this flow isn't wired up in the current build.".into(),
+                        hints: vec![
+                            "Use a Personal Access Token for now.".into(),
+                            "OAuth Device Flow is also available (requires a client_id).".into(),
+                        ],
+                    });
+                }
+            }
+            vec![]
+        }
+        Action::AuthBackToMethodPicker => {
+            auth.phase = AuthPhase::MethodPicker;
+            auth.loading = false;
+            auth.error = None;
+            auth.failed_focus = 0;
+            vec![]
+        }
         Action::AuthSubmitToken(token) => {
             // Sync the buffer to state and submit
             auth.token_input = token.clone();
             if token.is_empty() {
-                auth.error = Some("Token cannot be empty".into());
+                auth.error = Some(AuthErrorView {
+                    category: AuthErrorCategory::Other,
+                    headline: "Token cannot be empty".into(),
+                    detail: "Paste a GitHub Personal Access Token (starts with ghp_ or github_pat_).".into(),
+                    hints: Vec::new(),
+                });
+                auth.phase = AuthPhase::AuthFailed;
                 return vec![];
             }
             auth.loading = true;
             auth.error = None;
+            auth.phase = AuthPhase::Validating;
             vec![Effect::AuthenticatePat { token }]
         }
         Action::AuthTokenInputChanged(s) => {
             // Just update the local input buffer; no side effects
-            auth.token_input = s;
+            // Cap at 200 chars to prevent runaway paste flood
+            auth.token_input = if s.chars().count() > 200 {
+                s.chars().take(200).collect()
+            } else {
+                s
+            };
             // Clear any stale error so it doesn't linger as the user types
             if auth.error.is_some() {
                 auth.error = None;
             }
+            // Going from empty to non-empty: leave them in PatInput
             vec![]
         }
         Action::AuthStartPAT => {
+            auth.method = AuthMethodChoice::Pat;
             auth.mode = AuthMode::Pat;
+            auth.phase = AuthPhase::PatInput;
+            auth.error = None;
             vec![]
         }
         Action::AuthStartOAuth => {
+            // 'o' was pressed. Switch to the OAuth device activation screen.
+            auth.method = AuthMethodChoice::OAuth;
             auth.mode = AuthMode::OAuth;
-            // OAuth flow not implemented in MVP — show a stub message
-            auth.error = Some("OAuth device flow is not yet implemented in MVP".into());
+            auth.phase = AuthPhase::DeviceActivation;
+            auth.error = None;
             vec![]
+        }
+        Action::AuthStartOAuthNow => {
+            // Enter was pressed in the DeviceActivation screen. Kick off the flow.
+            if auth.oauth_client_id.as_deref().unwrap_or("").is_empty() {
+                auth.error = Some(AuthErrorView {
+                    category: AuthErrorCategory::OAuthConfig,
+                    headline: "OAuth requires a client_id".into(),
+                    detail: "Register an OAuth App at https://github.com/settings/applications/new and pass --oauth-client-id <id> or set GIT_VACUUM_OAUTH_CLIENT_ID.".into(),
+                    hints: vec![
+                        "Or use a Personal Access Token (Esc to go back).".into(),
+                    ],
+                });
+                auth.phase = AuthPhase::AuthFailed;
+                return vec![];
+            }
+            auth.mode = AuthMode::OAuth;
+            auth.loading = true;
+            auth.error = None;
+            auth.phase = AuthPhase::Validating;
+            vec![Effect::StartOAuthDeviceFlow {
+                client_id: auth.oauth_client_id.clone().unwrap_or_default(),
+                scopes: vec!["repo".into(), "read:org".into(), "user".into()],
+            }]
         }
         Action::AuthCancelOAuth => vec![],
         Action::AuthSkipForPublic => {
-            // MVP: we still require auth, so just stay on auth screen
-            auth.error = Some("Authentication is required (token stored in OS keyring)".into());
+            // MVP: we still require auth, so just show a structured error
+            // on the picker explaining why.
+            auth.error = Some(AuthErrorView {
+                category: AuthErrorCategory::Other,
+                headline: "Authentication is required".into(),
+                detail: "Public-only browsing is not supported in this build.".into(),
+                hints: vec![
+                    "Pick Personal Access Token or OAuth Device Flow to continue.".into(),
+                ],
+            });
+            auth.phase = AuthPhase::AuthFailed;
             vec![]
         }
         _ => vec![],
@@ -100,6 +217,17 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
         }
         Action::NextTab => { state.active_tab = state.active_tab.next(); vec![] }
         Action::PrevTab => { state.active_tab = state.active_tab.prev(); vec![] }
+        Action::SwitchTabByNumber(n) => {
+            let tabs = TabKind::all();
+            if n >= 1 && (n as usize) <= tabs.len() {
+                state.active_tab = tabs[(n - 1) as usize];
+            }
+            vec![]
+        }
+        Action::DismissWelcome => {
+            state.welcome_state = None;
+            vec![]
+        }
         Action::DismissModal => {
             state.modal_stack.pop();
             vec![]
@@ -265,7 +393,10 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
     match event {
         AppEvent::AuthSucceeded { info } => {
             // Transition to Running state
-            app.state = AppState::Running(RunningAppState::new(info));
+            let mut state = RunningAppState::new(info);
+            state.loading.repos = true;
+            state.loading.stats = true;
+            app.state = AppState::Running(state);
             // Load any cached repos immediately, then kick off fresh discovery
             vec![
                 Effect::LoadReposFromDb,
@@ -277,31 +408,31 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
             if let AppState::Running(state) = &mut app.state {
                 state.repos = entries;
                 state.tab_states.explorer.cursor = 0;
+                if let Some(welcome) = state.welcome_state.as_mut() {
+                    welcome.repos_count = Some(state.repos.len());
+                }
+                state.loading.repos = false;
             }
             vec![]
         }
-        AppEvent::AuthFailed { reason: _, detail } => {
+        AppEvent::AuthFailed { reason, detail } => {
             if let AppState::Auth(auth) = &mut app.state {
                 auth.loading = false;
-                auth.error = Some(detail);
+                auth.error = Some(classify_auth_error(&reason, &detail));
+                auth.phase = AuthPhase::AuthFailed;
+                auth.failed_focus = 0;
             }
             vec![]
         }
         AppEvent::ReposDiscovered { source: _, count } => {
             if let AppState::Running(state) = &mut app.state {
                 state.tab_states.explorer.loading = false;
-            }
-            // After discovery, reload repos from DB
-            let db = app.services.db.clone();
-            let services = app.services.clone();
-            Box::leak(Box::new(())); // placeholder
-            tokio::spawn(async move {
-                if let Ok(repos) = services.db.get_all_repos() {
-                    let _ = db; // suppress unused
-                    let _ = count;
-                    let _ = repos;
+                if let Some(welcome) = state.welcome_state.as_mut() {
+                    if welcome.repos_count.is_none() {
+                        welcome.repos_count = Some(count);
+                    }
                 }
-            });
+            }
             vec![]
         }
         AppEvent::DiscoveryFailed { error } => {
@@ -400,13 +531,101 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
             vec![]
         }
         AppEvent::StatsRefreshed => {
-            // The actual stats refresh happens via service::compute_stats; we just
-            // request it via the Effect chain in the binary.
+            // No-op: kept for backwards-compat; new flow is DashboardStatsUpdated
             vec![]
         }
-        AppEvent::OAuthCodeReceived { .. } | AppEvent::OAuthTokenReceived { .. } | AppEvent::OAuthTimeout => vec![],
+        AppEvent::DashboardStatsUpdated { stats, attention } => {
+            if let AppState::Running(state) = &mut app.state {
+                state.tab_states.dashboard.stats = Some(stats);
+                state.tab_states.dashboard.attention_list = attention;
+                state.tab_states.dashboard.loading = false;
+                state.loading.stats = false;
+            }
+            vec![]
+        }
+        AppEvent::Tick => {
+            if let AppState::Running(state) = &mut app.state {
+                if let Some(welcome) = state.welcome_state.as_mut() {
+                    let elapsed = welcome.entered_at.elapsed();
+                    welcome.phase = if elapsed < std::time::Duration::from_millis(500) {
+                        WelcomePhase::Greeting
+                    } else if elapsed < std::time::Duration::from_millis(1500) {
+                        WelcomePhase::Summary
+                    } else {
+                        WelcomePhase::Ready
+                    };
+                    // Auto-dismiss after 8 seconds regardless of phase
+                    if elapsed > std::time::Duration::from_secs(8) {
+                        state.welcome_state = None;
+                    }
+                }
+            }
+            vec![]
+        }
+        AppEvent::WelcomeAdvanced => {
+            if let AppState::Running(state) = &mut app.state {
+                if let Some(welcome) = state.welcome_state.as_mut() {
+                    welcome.phase = match welcome.phase {
+                        WelcomePhase::Greeting => WelcomePhase::Summary,
+                        WelcomePhase::Summary => WelcomePhase::Ready,
+                        WelcomePhase::Ready => {
+                            state.welcome_state = None;
+                            return vec![];
+                        }
+                    };
+                }
+            }
+            vec![]
+        }
+        AppEvent::OAuthCodeReceived { user_code, verification_uri, expires_in } => {
+            if let AppState::Auth(auth) = &mut app.state {
+                auth.loading = false;
+                auth.mode = AuthMode::OAuth;
+                auth.phase = AuthPhase::DeviceActivation;
+                // The device_code is set in the binary's spawned task; we
+                // populate what we can in the reducer.
+                auth.oauth = Some(crate::state::OAuthState {
+                    user_code,
+                    verification_uri,
+                    device_code: String::new(),
+                    interval_secs: 5,
+                    expires_at: std::time::Instant::now() + expires_in,
+                    poll_attempt: 0,
+                    last_poll: None,
+                });
+            }
+            vec![]
+        }
+        AppEvent::OAuthTokenReceived { token, scopes: _ } => {
+            // Token received from OAuth; hand it to the service to validate
+            // and store in keyring. The service will then return UserInfo and
+            // we transition to Running.
+            if let AppState::Auth(auth) = &mut app.state {
+                auth.phase = AuthPhase::Validating;
+            }
+            vec![Effect::CompleteOAuthWithToken { token }]
+        }
+        AppEvent::OAuthTimeout => {
+            if let AppState::Auth(auth) = &mut app.state {
+                auth.loading = false;
+                auth.oauth = None;
+                auth.phase = AuthPhase::AuthFailed;
+                auth.failed_focus = 0;
+                auth.error = Some(AuthErrorView {
+                    category: AuthErrorCategory::Other,
+                    headline: "OAuth code expired".into(),
+                    detail: "The device code expired before you authorized. Try again.".into(),
+                    hints: vec![
+                        "Press Enter to go back to the device activation screen.".into(),
+                    ],
+                });
+            }
+            vec![]
+        }
         AppEvent::LoggedOut => {
-            app.state = AppState::Auth(AuthScreenState::default());
+            let mut auth = AuthScreenState::default();
+            auth.oauth_client_id = app.oauth_client_id.clone();
+            app.state = AppState::Auth(auth);
             vec![]
         }
         AppEvent::SyncProgressUpdated { progress: _ } => vec![],
@@ -441,6 +660,70 @@ fn log_event(app: &mut App, job_id: JobId, repo_full_name: String, status: LogSt
 
 fn human_bytes(bytes: u64) -> String {
     git_vacuum_core::human_bytes(bytes)
+}
+
+/// Map a (reason, detail) pair from `AppEvent::AuthFailed` into a structured
+/// `AuthErrorView` for the new auth screen. We inspect the strings (rather
+/// than expanding the error types) because the reasons are emitted by the
+/// binary crate's effect dispatch.
+fn classify_auth_error(reason: &str, detail: &str) -> AuthErrorView {
+    let detail_lower = detail.to_lowercase();
+
+    let (category, headline) = match reason {
+        "oauth_init_failed" | "oauth_validate_failed" => {
+            (AuthErrorCategory::OAuthConfig, "OAuth setup failed".to_string())
+        }
+        "oauth_poll_failed" => {
+            (AuthErrorCategory::OAuthConfig, "OAuth polling failed".to_string())
+        }
+        "access_denied" => {
+            (AuthErrorCategory::AccessDenied, "Authorization denied".to_string())
+        }
+        _ => {
+            if detail_lower.contains("scope") {
+                (AuthErrorCategory::InsufficientScopes, "Token missing required scopes".to_string())
+            } else if detail_lower.contains("expired") {
+                (AuthErrorCategory::ExpiredToken, "Token expired".to_string())
+            } else if detail_lower.contains("network") || detail_lower.contains("timeout") {
+                (AuthErrorCategory::Network, "Network error".to_string())
+            } else {
+                (AuthErrorCategory::InvalidToken, "Invalid token".to_string())
+            }
+        }
+    };
+
+    let hints = match category {
+        AuthErrorCategory::InvalidToken => vec![
+            "Verify the token at https://github.com/settings/tokens".into(),
+            "Make sure the token starts with ghp_ or github_pat_.".into(),
+        ],
+        AuthErrorCategory::ExpiredToken => vec![
+            "Generate a new token at https://github.com/settings/tokens".into(),
+        ],
+        AuthErrorCategory::InsufficientScopes => vec![
+            "Required scopes: repo, read:org, user".into(),
+            "Re-generate the token with these scopes enabled.".into(),
+        ],
+        AuthErrorCategory::Network => vec![
+            "Check your internet connection.".into(),
+            "GitHub status: https://www.githubstatus.com".into(),
+        ],
+        AuthErrorCategory::OAuthConfig => vec![
+            "Register an OAuth App at https://github.com/settings/applications/new".into(),
+            "Set GIT_VACUUM_OAUTH_CLIENT_ID or pass --oauth-client-id <id>.".into(),
+        ],
+        AuthErrorCategory::AccessDenied => vec![
+            "Re-run the flow and click 'Authorize' on the GitHub page.".into(),
+        ],
+        AuthErrorCategory::Other => Vec::new(),
+    };
+
+    AuthErrorView {
+        category,
+        headline,
+        detail: detail.to_string(),
+        hints,
+    }
 }
 
 // Public re-exports for binary crate to call service functions
