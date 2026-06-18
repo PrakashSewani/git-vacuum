@@ -45,6 +45,9 @@ pub enum Action {
     AuthBackToMethodPicker,
     AuthMethodCursorMoved(i8),
     AuthFailedFocusMoved(i8),
+    AuthOpenOAuthUrl,
+    AuthCopyOAuthCode,
+    AuthDismissUrlPrompt,
 
     ExplorerToggle(usize),
     ExplorerSelectAll,
@@ -188,6 +191,9 @@ pub enum Effect {
 
     PersistRepos { entries: Vec<RepoEntry> },
     MarkReposDeleted { github_ids: Vec<i64> },
+
+    OpenUrl { url: String },
+    CopyToClipboard { text: String },
 
     None,
 }

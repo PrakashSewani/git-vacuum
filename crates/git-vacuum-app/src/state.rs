@@ -29,6 +29,9 @@ pub struct AuthScreenState {
     pub loading: bool,
     pub mode: AuthMode,
     pub oauth: Option<OAuthState>,
+    /// True when the OAuth code has just arrived and we should prompt to
+    /// open the verification URL in the browser. Cleared by Enter/Esc.
+    pub show_url_prompt: bool,
     /// 0 = "Try Again" (default), 1 = "Pick a different method". Used
     /// only on the AuthFailed screen.
     pub failed_focus: u8,

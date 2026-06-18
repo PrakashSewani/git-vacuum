@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use git_vacuum_core::RepoSource;
 
 #[derive(Debug, Clone, Default)]
@@ -75,6 +77,8 @@ pub struct SyncCenterTabState {
     pub log_scroll: usize,
     pub overall: Option<git_vacuum_core::OverallProgress>,
     pub concurrency: usize,
+    pub queued_repos: usize,
+    pub base_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +110,7 @@ pub struct ActivityLogTabState {
 #[derive(Debug, Clone)]
 pub struct SettingsTabState {
     pub fields: Vec<git_vacuum_core::SettingsField>,
+    pub selected_field: usize,
     pub editing_field: Option<usize>,
     pub draft_value: String,
     pub has_unsaved_changes: bool,
@@ -116,6 +121,7 @@ impl Default for SettingsTabState {
     fn default() -> Self {
         Self {
             fields: Vec::new(),
+            selected_field: 0,
             editing_field: None,
             draft_value: String::new(),
             has_unsaved_changes: false,

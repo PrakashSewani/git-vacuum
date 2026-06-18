@@ -19,6 +19,16 @@ impl SettingsCategory {
             SettingsCategory::Advanced => "Advanced",
         }
     }
+
+    pub fn all() -> [SettingsCategory; 5] {
+        [
+            SettingsCategory::General,
+            SettingsCategory::Clone,
+            SettingsCategory::Sync,
+            SettingsCategory::GitHub,
+            SettingsCategory::Advanced,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

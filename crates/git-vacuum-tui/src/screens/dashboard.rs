@@ -42,14 +42,14 @@ pub fn render_dashboard(f: &mut Frame, area: Rect, state: &DashboardTabState, ti
         let bar = progress_bar(width, pct, tick);
         let placeholder = Paragraph::new(vec![
             Line::from(Span::styled(
-                format!(" {} Computing dashboard stats", spinner_frame(tick)),
+                " Dashboard: overview of local backup mirror health.",
+                Style::default().fg(COLOR_MUTED),
+            )),
+            Line::from(Span::styled(
+                format!(" {} Computing stats", spinner_frame(tick)),
                 Style::default().fg(COLOR_MUTED),
             )),
             Line::from(Span::styled(bar, Style::default().fg(COLOR_PRIMARY_BRIGHT))),
-            Line::from(Span::styled(
-                " (no data yet — first run will populate this)",
-                Style::default().fg(COLOR_MUTED),
-            )),
         ])
         .block(health_block);
         f.render_widget(placeholder, chunks[0]);
@@ -72,7 +72,7 @@ pub fn render_dashboard(f: &mut Frame, area: Rect, state: &DashboardTabState, ti
         f.render_widget(stats, chunks[1]);
     } else {
         let line = Line::from(Span::styled(
-            format!(" {} calculating...", spinner_frame(tick)),
+            " Dashboard shows the current state after your most recent sync run.",
             Style::default().fg(COLOR_MUTED),
         ));
         f.render_widget(Paragraph::new(line).block(stats_block), chunks[1]);

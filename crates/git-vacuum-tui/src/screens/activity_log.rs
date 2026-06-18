@@ -1,11 +1,11 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use git_vacuum_app::tabs::ActivityLogTabState;
-use crate::theme::{COLOR_MUTED, COLOR_PRIMARY};
+use crate::theme::COLOR_MUTED;
 
 pub fn render_activity_log(f: &mut Frame, area: Rect, state: &ActivityLogTabState) {
     let chunks = Layout::default()
@@ -17,7 +17,7 @@ pub fn render_activity_log(f: &mut Frame, area: Rect, state: &ActivityLogTabStat
         .margin(1)
         .split(area);
 
-    let block = Block::default().borders(Borders::ALL).title(" Sync Run History ");
+    let block = Block::default().borders(Borders::ALL).title(" Activity Log — Sync Run History ");
     let items: Vec<ListItem> = state.runs.iter().enumerate().map(|(i, r)| {
         let style = if Some(i) == state.selected_run {
             Style::default().bg(ratatui::style::Color::DarkGray)
@@ -34,7 +34,7 @@ pub fn render_activity_log(f: &mut Frame, area: Rect, state: &ActivityLogTabStat
     f.render_widget(list, chunks[0]);
 
     let status = Paragraph::new(Line::from(Span::styled(
-        " Enter: view run  r: refresh",
+        " Activity Log keeps a record of every sync run for review and troubleshooting.   Enter: view  r: refresh",
         Style::default().fg(COLOR_MUTED),
     )));
     f.render_widget(status, chunks[1]);

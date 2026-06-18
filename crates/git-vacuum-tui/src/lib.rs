@@ -4,7 +4,7 @@ pub mod screens;
 pub mod terminal;
 pub mod theme;
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -36,9 +36,9 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     // Auth state gets its own dedicated layout — no title bar, no tab bar.
-    // This avoids the "loading stats" garbage and gives the input full focus.
-    if let AppState::Auth(_) = &app.state {
-        render_auth_full(f, area, app, tick);
+    // The auth renderer centers the panel inside the full terminal area.
+    if let AppState::Auth(auth) = &app.state {
+        render_auth(f, area, auth, tick);
         return;
     }
 
@@ -98,7 +98,7 @@ pub fn render(f: &mut Frame, app: &App) {
                     ("Enter", "view"), ("r", "refresh"), ("?", "help"),
                 ],
                 git_vacuum_app::state::TabKind::Settings => vec![
-                    ("Tab", "category"), ("Enter", "edit"),
+                    ("Tab", "category"), ("↑↓", "navigate"), ("Enter", "edit"),
                     ("Ctrl+S", "save"), ("Esc", "discard"), ("?", "help"),
                 ],
             };
@@ -117,47 +117,6 @@ pub fn render(f: &mut Frame, app: &App) {
             // Unreachable: handled by early return in render()
         }
     }
-}
-
-fn render_auth_full(f: &mut Frame, area: Rect, app: &App, tick: u64) {
-    let AppState::Auth(auth) = &app.state else { return };
-    // Use Percentage-based constraints so the layout adapts to any terminal
-    // height. The auth panel + key bar takes the central portion; spacers
-    // above and below absorb the rest.
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(30), // spacer top
-            Constraint::Length(20),     // auth panel (max 20 rows)
-            Constraint::Length(1),      // key bar
-            Constraint::Percentage(30), // spacer bottom (absorbs remaining)
-        ])
-        .split(area);
-    // Clamp panel height to fit the available area
-    let middle = chunks[1];
-    let available_h = middle.height.min(20);
-    let panel_w = middle.width.min(70);
-    let panel_x_offset = (middle.width.saturating_sub(panel_w)) / 2;
-    let panel = Rect {
-        x: middle.x + panel_x_offset,
-        y: middle.y,
-        width: panel_w,
-        height: available_h.max(8),
-    };
-    render_auth(f, panel, auth, tick);
-
-    // Key bar at the bottom of the auth layout
-    let bindings: Vec<(&str, &str)> = if auth.loading {
-        vec![("Esc", "cancel")]
-    } else if auth.token_input.is_empty() {
-        vec![("Enter", "submit"), ("Esc", "quit")]
-    } else {
-        vec![("Enter", "submit"), ("Backspace", "delete"), ("Esc", "clear+quit")]
-    };
-    f.render_widget(
-        Paragraph::new(key_bar(&bindings)),
-        chunks[2],
-    );
 }
 
 fn render_active_tab(f: &mut Frame, area: Rect, app: &App, tick: u64) {

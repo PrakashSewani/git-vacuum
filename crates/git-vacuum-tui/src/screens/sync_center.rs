@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use git_vacuum_app::tabs::{LogStatus, SyncCenterTabState, SyncPhase};
@@ -15,7 +15,7 @@ use crate::theme::{
 pub fn render_sync_center(f: &mut Frame, area: Rect, state: &SyncCenterTabState, tick: u64) {
     match &state.phase {
         SyncPhase::Idle => render_idle(f, area, tick),
-        SyncPhase::PreSync => render_pre(f, area, tick),
+        SyncPhase::PreSync => render_pre(f, area, state, tick),
         SyncPhase::Active | SyncPhase::Paused => render_active(f, area, state, tick),
         SyncPhase::Completed(summary) => render_completed(f, area, summary),
         SyncPhase::Cancelled(summary) => render_cancelled(f, area, summary),
@@ -26,12 +26,17 @@ fn render_idle(f: &mut Frame, area: Rect, tick: u64) {
     let p = Paragraph::new(vec![
         Line::from(""),
         Line::from(Span::styled(
+            " Sync Center: live view of clone / fetch operations.",
+            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
             format!(" {} No sync running.", spinner_frame(tick)),
             Style::default().fg(COLOR_MUTED),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            " Press Enter in the Explorer to start one.",
+            " Select repos in Explorer and press Enter to start a sync.",
             Style::default().fg(COLOR_MUTED),
         )),
     ])
@@ -39,20 +44,34 @@ fn render_idle(f: &mut Frame, area: Rect, tick: u64) {
     f.render_widget(p, area);
 }
 
-fn render_pre(f: &mut Frame, area: Rect, tick: u64) {
-    let p = Paragraph::new(vec![
+fn render_pre(f: &mut Frame, area: Rect, state: &SyncCenterTabState, tick: u64) {
+    let width = (area.width as usize).saturating_sub(8);
+    let bar = progress_bar(width.max(16), 0.25 + (tick as f32 / 20.0).sin() * 0.15, tick);
+    let body = vec![
         Line::from(""),
         Line::from(Span::styled(
-            format!(" {} Preparing sync plan", spinner_frame(tick)),
-            Style::default().fg(COLOR_ACCENT),
+            format!(" {} Sync request in progress", spinner_frame(tick)),
+            Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            " Press Enter to confirm, Esc to cancel.",
+            format!("   {} repos queued for backup", state.queued_repos),
+            Style::default().fg(COLOR_PRIMARY_BRIGHT),
+        )),
+        Line::from(Span::styled(
+            format!("   Base path: {}", state.base_path.display()),
             Style::default().fg(COLOR_MUTED),
         )),
-    ])
-    .block(Block::default().borders(Borders::ALL).title(" Pre-Sync "));
+        Line::from(""),
+        Line::from(Span::styled(bar, Style::default().fg(COLOR_PRIMARY_BRIGHT))),
+        Line::from(""),
+        Line::from(Span::styled(
+            " First repository will appear here shortly. Press Esc to cancel.",
+            Style::default().fg(COLOR_MUTED),
+        )),
+    ];
+    let p = Paragraph::new(body)
+        .block(Block::default().borders(Borders::ALL).title(" Pre-Sync "));
     f.render_widget(p, area);
 }
 

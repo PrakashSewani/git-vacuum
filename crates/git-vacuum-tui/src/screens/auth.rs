@@ -382,11 +382,8 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // brand
-            Constraint::Length(1), // spacer
-            Constraint::Length(1), // step 1 label
-            Constraint::Length(3), // URL box
-            Constraint::Length(1), // spacer
-            Constraint::Length(1), // step 2 label
+            Constraint::Length(2), // spacer
+            Constraint::Length(1), // step label
             Constraint::Length(3), // code box
             Constraint::Length(1), // spacer
             Constraint::Length(2), // status / countdown
@@ -399,52 +396,18 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
 
     render_brand(f, chunks[0], tick);
 
-    // ── Step 1: URL ────────────────────────────────────────────────
-    let step1 = Paragraph::new(Line::from(vec![
-        Span::styled("  1.  ", Style::default().fg(COLOR_MUTED)),
+    // ── Enter this code ─────────────────────────────────────────────
+    let step = Paragraph::new(Line::from(vec![
+        Span::styled("  ", Style::default().fg(COLOR_MUTED)),
         Span::styled(
-            "Open this URL in your browser:",
+            "Enter this code on GitHub:",
             Style::default().fg(COLOR_PRIMARY_BRIGHT),
         ),
     ]));
-    f.render_widget(step1, chunks[2]);
+    f.render_widget(step, chunks[2]);
 
-    let url = state
-        .oauth
-        .as_ref()
-        .map(|o| o.verification_uri.clone())
-        .unwrap_or_else(|| "https://github.com/login/device".to_string());
-    let url_box = Paragraph::new(Line::from(Span::styled(
-        format!("  {url}  "),
-        Style::default()
-            .fg(COLOR_LINK)
-            .add_modifier(Modifier::UNDERLINED | Modifier::BOLD),
-    )))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(COLOR_PRIMARY_BRIGHT))
-            .title(Span::styled(
-                " URL ",
-                Style::default().fg(COLOR_PRIMARY_BRIGHT),
-            )),
-    );
-    f.render_widget(url_box, chunks[3]);
-
-    // ── Step 2: Code ───────────────────────────────────────────────
-    let step2 = Paragraph::new(Line::from(vec![
-        Span::styled("  2.  ", Style::default().fg(COLOR_MUTED)),
-        Span::styled(
-            "Enter this code:",
-            Style::default().fg(COLOR_PRIMARY_BRIGHT),
-        ),
-    ]));
-    f.render_widget(step2, chunks[5]);
-
-    // The big code. If we don't have one yet (no OAuthCodeReceived event),
-    // we show the "press Enter to start" affordance instead.
     if let Some(oauth) = state.oauth.as_ref() {
-        let code_inner_width = chunks[6].width.saturating_sub(4) as usize;
+        let code_inner_width = chunks[3].width.saturating_sub(4) as usize;
         let code_lines = big_code_lines(&oauth.user_code, code_inner_width);
         let code_box = Paragraph::new(code_lines)
             .block(
@@ -457,13 +420,10 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
                     )),
             )
             .style(Style::default().bg(COLOR_CODE_BG));
-        f.render_widget(code_box, chunks[6]);
+        f.render_widget(code_box, chunks[3]);
     } else {
         let placeholder = Paragraph::new(Line::from(Span::styled(
-            format!(
-                "  {} Press Enter to start the browser flow",
-                spinner_frame(tick)
-            ),
+            format!("  {} Waiting for code from GitHub...", spinner_frame(tick)),
             Style::default().fg(COLOR_MUTED),
         )))
         .block(
@@ -475,7 +435,7 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
                     Style::default().fg(COLOR_PRIMARY_BRIGHT),
                 )),
         );
-        f.render_widget(placeholder, chunks[6]);
+        f.render_widget(placeholder, chunks[3]);
     }
 
     // ── Status / countdown ─────────────────────────────────────────
@@ -487,11 +447,7 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
         Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                format!(
-                    "{} Waiting for authorization{}",
-                    spinner_frame(tick),
-                    dots_frame(tick)
-                ),
+                format!("{} Waiting for authorization{}", spinner_frame(tick), dots_frame(tick)),
                 Style::default().fg(COLOR_ACCENT),
             ),
             Span::styled("    (timeout in ", Style::default().fg(COLOR_MUTED)),
@@ -504,21 +460,28 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
             Style::default().fg(COLOR_WARNING_BRIGHT),
         ))
     };
-    f.render_widget(Paragraph::new(status_line), chunks[8]);
+    f.render_widget(Paragraph::new(status_line), chunks[5]);
 
     let hint = Paragraph::new(Line::from(Span::styled(
         "  The app continues automatically once you authorize.",
         Style::default().fg(COLOR_MUTED),
     )));
-    f.render_widget(hint, chunks[10]);
+    f.render_widget(hint, chunks[7]);
 
-    let kb = Line::from(vec![
-        key_hint("Enter", "start"),
-        key_hint("c", "copy code"),
-        key_hint("o", "open URL"),
-        key_hint("Esc", "back"),
-    ]);
-    f.render_widget(Paragraph::new(kb), chunks[12]);
+    let kb = if state.show_url_prompt {
+        Line::from(vec![
+            key_hint("Enter", "open browser"),
+            key_hint("Esc", "skip"),
+        ])
+    } else {
+        Line::from(vec![
+            key_hint("Enter", "open URL"),
+            key_hint("o", "open URL"),
+            key_hint("c", "copy code"),
+            key_hint("Esc", "back"),
+        ])
+    };
+    f.render_widget(Paragraph::new(kb), chunks[9]);
 
     let border = Block::default()
         .borders(Borders::ALL)
@@ -528,6 +491,62 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
             Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
         ));
     f.render_widget(border, outer);
+
+    // ── Prompt to open browser URL ─────────────────────────────────
+    if state.show_url_prompt {
+        if let Some(oauth) = state.oauth.as_ref() {
+            render_url_prompt(f, outer, &oauth.verification_uri);
+        }
+    }
+}
+
+fn render_url_prompt(f: &mut Frame, area: Rect, url: &str) {
+    let popup = centered_rect(50, 30, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(COLOR_ACCENT))
+        .title(Span::styled(
+            " Open browser? ",
+            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let text = Paragraph::new(vec![
+        Line::from(vec![Span::styled(
+            "Open GitHub device activation page",
+            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![Span::styled(
+            "in your default browser?",
+            Style::default().fg(COLOR_PRIMARY_BRIGHT),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            url,
+            Style::default().fg(COLOR_LINK).add_modifier(Modifier::UNDERLINED),
+        )]),
+    ]);
+    f.render_widget(text, inner);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 /// ──────────────────────────────────────────────────────────────────────────

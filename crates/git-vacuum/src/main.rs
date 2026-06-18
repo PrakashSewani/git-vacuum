@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use arboard::Clipboard;
 use clap::Parser;
 use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use git_vacuum_app::reduce;
-use git_vacuum_app::state::{AppState, TabKind};
 use git_vacuum_app::App;
+use git_vacuum_app::state::{AppState, TabKind};
 use git_vacuum_core::{
-    Action, AppEvent, AuthMethod, EventBus, Effect, EventBusHandle, RepoSource, UserInfo,
+    Action, AppEvent, AuthMethod, EventBus, Effect, RepoSource, UserInfo,
 };
 use git_vacuum_db::SqliteDatabase;
 use git_vacuum_core::Database as _;
@@ -18,9 +18,9 @@ use git_vacuum_github::OctocrabGithubApi;
 use git_vacuum_keyring::PlatformKeyring;
 use git_vacuum_service::{run_sync as svc_run_sync, Services, SyncRequest};
 use git_vacuum_tui::terminal;
+use open;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use futures::StreamExt;
 
 #[derive(Parser, Debug)]
@@ -140,7 +140,7 @@ async fn run_headless_sync(
 
 async fn run_tui(
     services: Arc<Services>,
-    db: Arc<SqliteDatabase>,
+    _db: Arc<SqliteDatabase>,
     clone_path: PathBuf,
     concurrency: usize,
     initial_token: Option<String>,
@@ -157,7 +157,6 @@ async fn run_tui(
 
     // Try loading stored credentials
     let services_for_load = services.clone();
-    let bus_tx = bus.app_tx.clone();
 
     // If --token was passed, store it in the keyring and treat as authenticated.
     if let Some(token) = initial_token.as_deref() {
@@ -178,18 +177,45 @@ async fn run_tui(
     match user {
         Ok(Some(info)) => {
             app.reduce_event(AppEvent::AuthSucceeded { info });
-            let _ = db; // suppress unused
         }
         Ok(None) => {
-            // Stay on auth screen
-            let _ = bus_tx.send(AppEvent::OAuthCodeReceived {
-                user_code: String::new(),
-                verification_uri: String::new(),
-                expires_in: Duration::from_secs(0),
-            }); // no-op wakeup
+            // No stored credentials: stay on the auth screen. The default
+            // AuthScreenState.phase is MethodPicker, so the user is asked
+            // to choose PAT / OAuth / gh CLI on first launch.
         }
         Err(e) => {
             log::warn!("Stored credentials invalid: {e}");
+        }
+    }
+
+    // Load saved settings into the running state.
+    if let AppState::Running(ref mut r) = app.state {
+        if let Ok(Some(v)) = services.db.get_setting("clone_path") {
+            r.clone_path = v;
+        }
+        if let Ok(Some(v)) = services.db.get_setting("concurrency") {
+            if let Ok(n) = v.parse::<usize>() {
+                r.tab_states.sync_center.concurrency = n.clamp(1, 64);
+            }
+        }
+        if let Ok(Some(v)) = services.db.get_setting("skip_archived") {
+            r.tab_states.explorer.skip_archived = v == "true";
+        }
+        if let Ok(Some(v)) = services.db.get_setting("skip_forks") {
+            r.tab_states.explorer.skip_forks = v == "true";
+        }
+        if let Ok(Some(v)) = services.db.get_setting("org_input") {
+            r.tab_states.explorer.org_input = v;
+        }
+        if let Ok(Some(v)) = services.db.get_setting("topic_filter") {
+            r.tab_states.explorer.topic_filter = v;
+        }
+        if let Ok(Some(v)) = services.db.get_setting("default_source") {
+            r.tab_states.explorer.source = match v.as_str() {
+                "Starred" => git_vacuum_core::RepoSource::Starred,
+                "All" => git_vacuum_core::RepoSource::All,
+                _ => git_vacuum_core::RepoSource::MyRepos,
+            };
         }
     }
 
@@ -340,6 +366,14 @@ fn key_to_action(key: KeyEvent, app: &mut App) -> Option<Action> {
             return key_to_action_auth(key, app);
         }
     }
+    if let AppState::Running(state) = &app.state {
+        if state.active_tab == TabKind::Settings && key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT) {
+            let cats = git_vacuum_core::SettingsCategory::all();
+            let current = cats.iter().position(|c| *c == state.tab_states.settings.selected_category).unwrap_or(0);
+            let next = (current + 1) % cats.len();
+            return Some(Action::SettingsSwitchCategory(next));
+        }
+    }
     match key.code {
         KeyCode::Char('q') => return Some(Action::Quit),
         KeyCode::Char('?') => return Some(Action::OpenHelp),
@@ -449,15 +483,24 @@ fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
             None
         }
         AuthPhase::DeviceActivation => {
+            if auth.show_url_prompt {
+                if key.code == KeyCode::Esc {
+                    return Some(Action::AuthDismissUrlPrompt);
+                }
+                if key.code == KeyCode::Enter || matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+                    return Some(Action::AuthOpenOAuthUrl);
+                }
+                return None;
+            }
             if key.code == KeyCode::Esc {
                 return Some(Action::AuthBackToMethodPicker);
             }
-            if key.code == KeyCode::Enter {
-                return Some(Action::AuthStartOAuthNow);
+            if key.code == KeyCode::Enter || matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+                return Some(Action::AuthOpenOAuthUrl);
             }
-            // 'c' / 'o' are reserved shortcuts shown in the key bar; they
-            // don't do anything in this iteration but reserving them keeps
-            // the keymap stable.
+            if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                return Some(Action::AuthCopyOAuthCode);
+            }
             None
         }
         AuthPhase::AuthFailed => {
@@ -529,6 +572,12 @@ fn key_to_action_running(key: KeyEvent, app: &mut App) -> Option<Action> {
             KeyCode::Char('r') => Some(Action::ExplorerRefresh),
             KeyCode::Enter => Some(Action::ExplorerStartSync),
             KeyCode::Char('/') => Some(Action::ExplorerSetFilter(String::new())),
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::ExplorerSelectAll)
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::ExplorerDeselectAll)
+            }
             KeyCode::Down => {
                 let max = state.repos.len().saturating_sub(1);
                 state.tab_states.explorer.cursor = (state.tab_states.explorer.cursor + 1).min(max);
@@ -550,7 +599,42 @@ fn key_to_action_running(key: KeyEvent, app: &mut App) -> Option<Action> {
             KeyCode::Char('r') => Some(Action::DashboardRefreshStats),
             _ => None,
         },
-        TabKind::Settings => None,
+        TabKind::Settings => {
+            let st = &mut state.tab_states.settings;
+            if st.editing_field.is_some() {
+                match key.code {
+                    KeyCode::Esc => Some(Action::SettingsDiscard),
+                    KeyCode::Enter => Some(Action::SettingsSave),
+                    KeyCode::Backspace => {
+                        st.draft_value.pop();
+                        None
+                    }
+                    KeyCode::Char(c) => {
+                        st.draft_value.push(c);
+                        None
+                    }
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Tab => Some(Action::NextTab),
+                    KeyCode::BackTab => Some(Action::PrevTab),
+                    KeyCode::Up => {
+                        let new = st.selected_field.saturating_sub(1);
+                        Some(Action::SettingsNavigate(new))
+                    }
+                    KeyCode::Down => {
+                        let max = st.fields.len().saturating_sub(1);
+                        let new = (st.selected_field + 1).min(max);
+                        Some(Action::SettingsNavigate(new))
+                    }
+                    KeyCode::Enter => Some(Action::SettingsEdit(st.selected_field)),
+                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::SettingsSave),
+                    KeyCode::Esc => Some(Action::SettingsDiscard),
+                    _ => None,
+                }
+            }
+        }
     }
 }
 
@@ -688,6 +772,22 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
             // No-op: the poller exits naturally when it can't find the device
             // code (after deletion) or on user action. We don't expose a
             // cancel endpoint in the github API.
+        }
+        Effect::OpenUrl { url } => {
+            let url_owned = url.clone();
+            tokio::spawn(async move {
+                if let Err(e) = tokio::task::spawn_blocking(move || open::that(&url_owned)).await {
+                    log::warn!("Could not open browser URL: {e}");
+                }
+            });
+        }
+        Effect::CopyToClipboard { text } => {
+            let text_owned = text.clone();
+            tokio::spawn(async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    Clipboard::new().and_then(|mut cb| cb.set_text(text_owned))
+                }).await;
+            });
         }
         Effect::CompleteOAuthWithToken { token } => {
             let services2 = services.clone();
@@ -859,7 +959,14 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                 }
             });
         }
-        Effect::RecordSyncRun { .. } | Effect::ExportRun { .. } | Effect::SaveSetting { .. } | Effect::TestConnection | Effect::PersistRepos { .. } | Effect::MarkReposDeleted { .. } => {
+        Effect::SaveSetting { key, value } => {
+            tokio::spawn(async move {
+                if let Err(e) = services.db.set_setting(&key, &value) {
+                    log::warn!("Failed to save setting {}: {}", key, e);
+                }
+            });
+        }
+        Effect::RecordSyncRun { .. } | Effect::ExportRun { .. } | Effect::TestConnection | Effect::PersistRepos { .. } | Effect::MarkReposDeleted { .. } => {
             log::debug!("Effect not yet implemented: {effect:?}");
         }
         Effect::CloneSingle { .. } | Effect::SyncSingle { .. } => {

@@ -2,7 +2,7 @@
 //! These are pure-ish: they take `&mut App` and return `Vec<Effect>`.
 //! They never `.await` — async work happens in spawned effect tasks.
 
-use git_vacuum_core::{Action, AppEvent, AuthMethodChoice, Effect, JobId, RepoSource, TabTarget};
+use git_vacuum_core::{Action, AppEvent, AuthMethodChoice, Effect, JobId, RepoSource, SettingsCategory, TabTarget};
 use git_vacuum_service::{authenticate_pat, load_stored_credentials, logout, run_discovery};
 
 use crate::modals::{CommandAction, CommandPaletteState, Modal};
@@ -73,8 +73,25 @@ fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
                     auth.method = AuthMethodChoice::OAuth;
                     auth.last_method = AuthMethodChoice::OAuth;
                     auth.mode = AuthMode::OAuth;
-                    auth.phase = AuthPhase::DeviceActivation;
                     auth.error = None;
+                    if auth.oauth_client_id.as_deref().unwrap_or("").is_empty() {
+                        auth.error = Some(AuthErrorView {
+                            category: AuthErrorCategory::OAuthConfig,
+                            headline: "OAuth requires a client_id".into(),
+                            detail: "Register an OAuth App at https://github.com/settings/applications/new and pass --oauth-client-id <id> or set GIT_VACUUM_OAUTH_CLIENT_ID.".into(),
+                            hints: vec![
+                                "Or use a Personal Access Token (Esc to go back).".into(),
+                            ],
+                        });
+                        auth.phase = AuthPhase::AuthFailed;
+                        return vec![];
+                    }
+                    auth.loading = true;
+                    auth.phase = AuthPhase::Validating;
+                    return vec![Effect::StartOAuthDeviceFlow {
+                        client_id: auth.oauth_client_id.clone().unwrap_or_default(),
+                        scopes: vec!["repo".into(), "read:org".into(), "user".into()],
+                    }];
                 }
                 AuthMethodChoice::GhCli => {
                     // No service plumbing in this iteration; show an error
@@ -140,15 +157,11 @@ fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
             vec![]
         }
         Action::AuthStartOAuth => {
-            // 'o' was pressed. Switch to the OAuth device activation screen.
+            // 'o' shortcut from PAT input: immediately start OAuth if configured.
             auth.method = AuthMethodChoice::OAuth;
+            auth.last_method = AuthMethodChoice::OAuth;
             auth.mode = AuthMode::OAuth;
-            auth.phase = AuthPhase::DeviceActivation;
             auth.error = None;
-            vec![]
-        }
-        Action::AuthStartOAuthNow => {
-            // Enter was pressed in the DeviceActivation screen. Kick off the flow.
             if auth.oauth_client_id.as_deref().unwrap_or("").is_empty() {
                 auth.error = Some(AuthErrorView {
                     category: AuthErrorCategory::OAuthConfig,
@@ -161,14 +174,37 @@ fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
                 auth.phase = AuthPhase::AuthFailed;
                 return vec![];
             }
-            auth.mode = AuthMode::OAuth;
             auth.loading = true;
-            auth.error = None;
             auth.phase = AuthPhase::Validating;
-            vec![Effect::StartOAuthDeviceFlow {
+            return vec![Effect::StartOAuthDeviceFlow {
                 client_id: auth.oauth_client_id.clone().unwrap_or_default(),
                 scopes: vec!["repo".into(), "read:org".into(), "user".into()],
-            }]
+            }];
+        }
+        Action::AuthStartOAuthNow => {
+            // Enter in the device activation screen now opens the browser URL.
+            if let Some(oauth) = auth.oauth.as_ref() {
+                auth.show_url_prompt = false;
+                return vec![Effect::OpenUrl { url: oauth.verification_uri.clone() }];
+            }
+            vec![]
+        }
+        Action::AuthOpenOAuthUrl => {
+            if let Some(oauth) = auth.oauth.as_ref() {
+                auth.show_url_prompt = false;
+                return vec![Effect::OpenUrl { url: oauth.verification_uri.clone() }];
+            }
+            vec![]
+        }
+        Action::AuthCopyOAuthCode => {
+            if let Some(oauth) = auth.oauth.as_ref() {
+                return vec![Effect::CopyToClipboard { text: oauth.user_code.clone() }];
+            }
+            vec![]
+        }
+        Action::AuthDismissUrlPrompt => {
+            auth.show_url_prompt = false;
+            vec![]
         }
         Action::AuthCancelOAuth => vec![],
         Action::AuthSkipForPublic => {
@@ -213,6 +249,9 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
         }
         Action::SwitchTab(t) => {
             state.active_tab = tab_target_to_kind(t);
+            if matches!(state.active_tab, TabKind::Settings) {
+                rebuild_settings_fields(state);
+            }
             vec![]
         }
         Action::NextTab => { state.active_tab = state.active_tab.next(); vec![] }
@@ -221,6 +260,9 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             let tabs = TabKind::all();
             if n >= 1 && (n as usize) <= tabs.len() {
                 state.active_tab = tabs[(n - 1) as usize];
+                if matches!(state.active_tab, TabKind::Settings) {
+                    rebuild_settings_fields(state);
+                }
             }
             vec![]
         }
@@ -282,6 +324,8 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
                 std::path::PathBuf::from(&state.clone_path)
             };
             state.tab_states.sync_center.phase = crate::tabs::SyncPhase::PreSync;
+            state.tab_states.sync_center.queued_repos = selected.len();
+            state.tab_states.sync_center.base_path = base.clone();
             state.active_tab = TabKind::SyncCenter;
             vec![Effect::StartSync { repos: selected, base_path: base, concurrency: 8 }]
         }
@@ -290,7 +334,14 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             if selected.is_empty() {
                 vec![]
             } else {
-                let base = dirs_next_default();
+                let base = if state.clone_path.is_empty() {
+                    dirs_next_default()
+                } else {
+                    std::path::PathBuf::from(&state.clone_path)
+                };
+                state.tab_states.sync_center.phase = crate::tabs::SyncPhase::PreSync;
+                state.tab_states.sync_center.queued_repos = selected.len();
+                state.active_tab = TabKind::SyncCenter;
                 vec![Effect::StartSync { repos: selected, base_path: base, concurrency: 8 }]
             }
         }
@@ -302,13 +353,118 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             if selected.is_empty() {
                 return vec![];
             }
-            let base = dirs_next_default();
+            let base = if state.clone_path.is_empty() {
+                dirs_next_default()
+            } else {
+                std::path::PathBuf::from(&state.clone_path)
+            };
             state.tab_states.sync_center.phase = crate::tabs::SyncPhase::Active;
+            state.tab_states.sync_center.queued_repos = selected.len();
             vec![Effect::StartSync { repos: selected, base_path: base, concurrency: state.tab_states.sync_center.concurrency.max(1) }]
         }
         Action::SyncCancel => vec![Effect::CancelSync],
         Action::SyncPause => vec![Effect::PauseSync],
         Action::SyncResume => vec![Effect::ResumeSync],
+        Action::SettingsSwitchCategory(idx) => {
+            let cats = git_vacuum_core::SettingsCategory::all();
+            if idx < cats.len() {
+                state.tab_states.settings.selected_category = cats[idx];
+                state.tab_states.settings.selected_field = 0;
+                state.tab_states.settings.editing_field = None;
+                state.tab_states.settings.draft_value.clear();
+                state.tab_states.settings.has_unsaved_changes = false;
+                rebuild_settings_fields(state);
+            }
+            vec![]
+        }
+        Action::SettingsNavigate(idx) => {
+            state.tab_states.settings.selected_field = idx.min(state.tab_states.settings.fields.len().saturating_sub(1));
+            vec![]
+        }
+        Action::SettingsEdit(idx) => {
+            if let Some(field) = state.tab_states.settings.fields.get(idx).cloned() {
+                match field.kind {
+                    git_vacuum_core::SettingsFieldKind::Boolean => {
+                        let new_val = if field.value == "true" { "false" } else { "true" };
+                        if let Some(f) = state.tab_states.settings.fields.get_mut(idx) {
+                            f.value = new_val.to_string();
+                        }
+                        state.tab_states.settings.has_unsaved_changes = true;
+                        apply_setting_value(state, &field.key, &new_val);
+                    }
+                    git_vacuum_core::SettingsFieldKind::Dropdown { options } => {
+                        let current = options.iter().position(|o| o == &field.value).unwrap_or(0);
+                        let next = (current + 1) % options.len();
+                        let new_val = options[next].clone();
+                        if let Some(f) = state.tab_states.settings.fields.get_mut(idx) {
+                            f.value = new_val.clone();
+                        }
+                        state.tab_states.settings.has_unsaved_changes = true;
+                        apply_setting_value(state, &field.key, &new_val);
+                    }
+                    _ => {
+                        state.tab_states.settings.editing_field = Some(idx);
+                        state.tab_states.settings.draft_value = field.value.clone();
+                    }
+                }
+            }
+            vec![]
+        }
+        Action::SettingsToggle(idx) => {
+            if let Some(field) = state.tab_states.settings.fields.get(idx).cloned() {
+                if matches!(field.kind, git_vacuum_core::SettingsFieldKind::Boolean) {
+                    let new_val = if field.value == "true" { "false" } else { "true" };
+                    if let Some(f) = state.tab_states.settings.fields.get_mut(idx) {
+                        f.value = new_val.to_string();
+                    }
+                    state.tab_states.settings.has_unsaved_changes = true;
+                    apply_setting_value(state, &field.key, &new_val);
+                }
+            }
+            vec![]
+        }
+        Action::SettingsSelectDropdown(idx) => {
+            if let Some(field) = state.tab_states.settings.fields.get(idx).cloned() {
+                if let git_vacuum_core::SettingsFieldKind::Dropdown { options } = field.kind {
+                    let current = options.iter().position(|o| o == &field.value).unwrap_or(0);
+                    let next = (current + 1) % options.len();
+                    let new_val = options[next].clone();
+                    if let Some(f) = state.tab_states.settings.fields.get_mut(idx) {
+                        f.value = new_val.clone();
+                    }
+                    state.tab_states.settings.has_unsaved_changes = true;
+                    apply_setting_value(state, &field.key, &new_val);
+                }
+            }
+            vec![]
+        }
+        Action::SettingsDropdownPick(_) => vec![],
+        Action::SettingsSave => {
+            if let Some(idx) = state.tab_states.settings.editing_field {
+                let key = state.tab_states.settings.fields.get(idx).map(|f| f.key.clone()).unwrap_or_default();
+                let value = state.tab_states.settings.draft_value.clone();
+                if let Some(field) = state.tab_states.settings.fields.get_mut(idx) {
+                    field.value = value.clone();
+                }
+                apply_setting_value(state, &key, &value);
+                state.tab_states.settings.editing_field = None;
+                state.tab_states.settings.draft_value.clear();
+            }
+            state.tab_states.settings.has_unsaved_changes = false;
+            let mut effects = Vec::new();
+            for field in &state.tab_states.settings.fields {
+                effects.push(Effect::SaveSetting { key: field.key.clone(), value: field.value.clone() });
+            }
+            rebuild_settings_fields(state);
+            effects
+        }
+        Action::SettingsDiscard => {
+            state.tab_states.settings.editing_field = None;
+            state.tab_states.settings.draft_value.clear();
+            state.tab_states.settings.has_unsaved_changes = false;
+            rebuild_settings_fields(state);
+            vec![]
+        }
         Action::RefreshDashboardStats => vec![Effect::RefreshDashboardStats],
         Action::Logout => vec![Effect::Logout],
 
@@ -582,6 +738,7 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
                 auth.loading = false;
                 auth.mode = AuthMode::OAuth;
                 auth.phase = AuthPhase::DeviceActivation;
+                auth.show_url_prompt = true;
                 // The device_code is set in the binary's spawned task; we
                 // populate what we can in the reducer.
                 auth.oauth = Some(crate::state::OAuthState {
@@ -633,6 +790,125 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
             app.state = AppState::FatalError(message);
             vec![]
         }
+    }
+}
+
+fn rebuild_settings_fields(state: &mut RunningAppState) {
+    if state.tab_states.settings.editing_field.is_some() {
+        return;
+    }
+    let cat = state.tab_states.settings.selected_category;
+    let mut fields = Vec::new();
+    match cat {
+        SettingsCategory::General => {
+            fields.push(git_vacuum_core::SettingsField {
+                key: "clone_path".into(),
+                label: "Clone path".into(),
+                value: state.clone_path.clone(),
+                kind: git_vacuum_core::SettingsFieldKind::Path,
+                help: Some("Directory where repositories are cloned.".into()),
+            });
+            fields.push(git_vacuum_core::SettingsField {
+                key: "concurrency".into(),
+                label: "Concurrency".into(),
+                value: state.tab_states.sync_center.concurrency.to_string(),
+                kind: git_vacuum_core::SettingsFieldKind::Integer { min: 1, max: 64 },
+                help: Some("Max parallel clone/fetch operations.".into()),
+            });
+        }
+        SettingsCategory::Clone => {
+            fields.push(git_vacuum_core::SettingsField {
+                key: "skip_archived".into(),
+                label: "Skip archived repos".into(),
+                value: state.tab_states.explorer.skip_archived.to_string(),
+                kind: git_vacuum_core::SettingsFieldKind::Boolean,
+                help: Some("Hide archived repositories in the Explorer.".into()),
+            });
+            fields.push(git_vacuum_core::SettingsField {
+                key: "skip_forks".into(),
+                label: "Skip forks".into(),
+                value: state.tab_states.explorer.skip_forks.to_string(),
+                kind: git_vacuum_core::SettingsFieldKind::Boolean,
+                help: Some("Hide forked repositories in the Explorer.".into()),
+            });
+        }
+        SettingsCategory::Sync => {
+            fields.push(git_vacuum_core::SettingsField {
+                key: "concurrency".into(),
+                label: "Concurrency".into(),
+                value: state.tab_states.sync_center.concurrency.to_string(),
+                kind: git_vacuum_core::SettingsFieldKind::Integer { min: 1, max: 64 },
+                help: Some("Max parallel clone/fetch operations.".into()),
+            });
+            fields.push(git_vacuum_core::SettingsField {
+                key: "retry_failed".into(),
+                label: "Retry failed jobs".into(),
+                value: "true".into(),
+                kind: git_vacuum_core::SettingsFieldKind::Boolean,
+                help: Some("Retry failed repositories automatically.".into()),
+            });
+        }
+        SettingsCategory::GitHub => {
+            fields.push(git_vacuum_core::SettingsField {
+                key: "default_source".into(),
+                label: "Default source".into(),
+                value: format!("{:?}", state.tab_states.explorer.source),
+                kind: git_vacuum_core::SettingsFieldKind::Dropdown {
+                    options: vec!["MyRepos".into(), "Starred".into(), "All".into()],
+                },
+                help: Some("Which repository list to load on startup.".into()),
+            });
+            fields.push(git_vacuum_core::SettingsField {
+                key: "org_input".into(),
+                label: "Organization".into(),
+                value: state.tab_states.explorer.org_input.clone(),
+                kind: git_vacuum_core::SettingsFieldKind::Text,
+                help: Some("Organization login when using Org source.".into()),
+            });
+            fields.push(git_vacuum_core::SettingsField {
+                key: "topic_filter".into(),
+                label: "Topic filter".into(),
+                value: state.tab_states.explorer.topic_filter.clone(),
+                kind: git_vacuum_core::SettingsFieldKind::Text,
+                help: Some("Filter repositories by topic.".into()),
+            });
+        }
+        SettingsCategory::Advanced => {
+            fields.push(git_vacuum_core::SettingsField {
+                key: "timeout_secs".into(),
+                label: "Timeout per job (seconds)".into(),
+                value: "1800".into(),
+                kind: git_vacuum_core::SettingsFieldKind::Integer { min: 60, max: 86400 },
+                help: Some("Max seconds allowed for one clone/fetch job.".into()),
+            });
+        }
+    }
+    state.tab_states.settings.fields = fields;
+    if state.tab_states.settings.selected_field >= state.tab_states.settings.fields.len() && !state.tab_states.settings.fields.is_empty() {
+        state.tab_states.settings.selected_field = 0;
+    }
+}
+
+fn apply_setting_value(state: &mut RunningAppState, key: &str, value: &str) {
+    match key {
+        "clone_path" => state.clone_path = value.to_string(),
+        "concurrency" => {
+            if let Ok(n) = value.parse::<usize>() {
+                state.tab_states.sync_center.concurrency = n.clamp(1, 64);
+            }
+        }
+        "skip_archived" => state.tab_states.explorer.skip_archived = value == "true",
+        "skip_forks" => state.tab_states.explorer.skip_forks = value == "true",
+        "org_input" => state.tab_states.explorer.org_input = value.to_string(),
+        "topic_filter" => state.tab_states.explorer.topic_filter = value.to_string(),
+        "default_source" => {
+            state.tab_states.explorer.source = match value {
+                "Starred" => git_vacuum_core::RepoSource::Starred,
+                "All" => git_vacuum_core::RepoSource::All,
+                _ => git_vacuum_core::RepoSource::MyRepos,
+            };
+        }
+        _ => {}
     }
 }
 
