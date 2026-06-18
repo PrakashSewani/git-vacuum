@@ -8,10 +8,7 @@ use crate::Services;
 /// Validate a PAT against GitHub, then persist it to the OS keyring
 /// and upsert the account metadata in the database.
 /// Token goes to keyring ONLY (never to SQLite, never logged).
-pub async fn authenticate_pat(
-    services: Arc<Services>,
-    token: &str,
-) -> Result<UserInfo, AuthError> {
+pub async fn authenticate_pat(services: Arc<Services>, token: &str) -> Result<UserInfo, AuthError> {
     if token.is_empty() {
         return Err(AuthError::InvalidToken);
     }
@@ -108,7 +105,10 @@ pub async fn complete_oauth_with_token(
     }
     services.github.set_token(&token);
     let info = services.github.validate_token().await?;
-    services.keyring.set_token(&token).map_err(map_keyring_error)?;
+    services
+        .keyring
+        .set_token(&token)
+        .map_err(map_keyring_error)?;
     services
         .db
         .upsert_account(&info)

@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use git_vacuum_core::{
-    Database, GithubApi, GitOps, KeyringStore, PartialSyncSummary, RepoEntry, SyncOptions,
+    Database, GitOps, GithubApi, KeyringStore, PartialSyncSummary, RepoEntry, SyncOptions,
     SyncSummary, UserInfo,
 };
 use tokio::sync::mpsc;
@@ -43,7 +43,12 @@ impl Services {
         db: Arc<dyn Database>,
         keyring: Arc<dyn KeyringStore>,
     ) -> Self {
-        Self { github, git, db, keyring }
+        Self {
+            github,
+            git,
+            db,
+            keyring,
+        }
     }
 }
 
@@ -127,5 +132,11 @@ pub fn summarize_partial(
     pending_dropped: usize,
     bytes_transferred: u64,
 ) -> PartialSyncSummary {
-    PartialSyncSummary { completed, failed, cancelled, pending_dropped, bytes_transferred }
+    PartialSyncSummary {
+        completed,
+        failed,
+        cancelled,
+        pending_dropped,
+        bytes_transferred,
+    }
 }

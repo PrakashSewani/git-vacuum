@@ -7,8 +7,16 @@ pub fn map_repo(r: octocrab::models::Repository) -> RemoteRepo {
         Some("internal") => RepoVisibility::Internal,
         _ => RepoVisibility::Public,
     };
-    let owner_login = r.owner.as_ref().map(|o| o.login.clone()).unwrap_or_default();
-    let owner_is_org = r.owner.as_ref().map(|o| o.r#type == "Organization").unwrap_or(false);
+    let owner_login = r
+        .owner
+        .as_ref()
+        .map(|o| o.login.clone())
+        .unwrap_or_default();
+    let owner_is_org = r
+        .owner
+        .as_ref()
+        .map(|o| o.r#type == "Organization")
+        .unwrap_or(false);
 
     RemoteRepo {
         github_id: r.id.0 as i64,
@@ -28,7 +36,13 @@ pub fn map_repo(r: octocrab::models::Repository) -> RemoteRepo {
         size_kb: r.size.map(|s| s as i64),
         stars: r.stargazers_count.map(|c| c as i32).unwrap_or(0),
         open_issues: r.open_issues_count.map(|c| c as i32).unwrap_or(0),
-        license_spdx: r.license.and_then(|l| if l.spdx_id.is_empty() { None } else { Some(l.spdx_id) }),
+        license_spdx: r.license.and_then(|l| {
+            if l.spdx_id.is_empty() {
+                None
+            } else {
+                Some(l.spdx_id)
+            }
+        }),
         topics: r.topics.unwrap_or_default(),
         clone_url_ssh: r.ssh_url,
         clone_url_https: r.clone_url.map(|u| u.to_string()).unwrap_or_default(),

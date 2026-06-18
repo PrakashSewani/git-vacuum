@@ -2,7 +2,9 @@
 //! These are pure-ish: they take `&mut App` and return `Vec<Effect>`.
 //! They never `.await` — async work happens in spawned effect tasks.
 
-use git_vacuum_core::{Action, AppEvent, AuthMethodChoice, Effect, JobId, RepoSource, SettingsCategory, TabTarget};
+use git_vacuum_core::{
+    Action, AppEvent, AuthMethodChoice, Effect, JobId, RepoSource, SettingsCategory, TabTarget,
+};
 use git_vacuum_service::{authenticate_pat, load_stored_credentials, logout, run_discovery};
 
 use crate::modals::{CommandAction, CommandPaletteState, Modal};
@@ -33,7 +35,9 @@ fn reduce_in_state(app: &mut App, action: Action) -> Vec<Effect> {
 }
 
 fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
-    let AppState::Auth(auth) = &mut app.state else { return vec![] };
+    let AppState::Auth(auth) = &mut app.state else {
+        return vec![];
+    };
     match action {
         Action::AuthMethodCursorMoved(delta) => {
             // 3 methods, wrap. GhCli is shown disabled; cursor still moves
@@ -123,7 +127,9 @@ fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
                 auth.error = Some(AuthErrorView {
                     category: AuthErrorCategory::Other,
                     headline: "Token cannot be empty".into(),
-                    detail: "Paste a GitHub Personal Access Token (starts with ghp_ or github_pat_).".into(),
+                    detail:
+                        "Paste a GitHub Personal Access Token (starts with ghp_ or github_pat_)."
+                            .into(),
                     hints: Vec::new(),
                 });
                 auth.phase = AuthPhase::AuthFailed;
@@ -176,29 +182,35 @@ fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
             }
             auth.loading = true;
             auth.phase = AuthPhase::Validating;
-            return vec![Effect::StartOAuthDeviceFlow {
+            vec![Effect::StartOAuthDeviceFlow {
                 client_id: auth.oauth_client_id.clone().unwrap_or_default(),
                 scopes: vec!["repo".into(), "read:org".into(), "user".into()],
-            }];
+            }]
         }
         Action::AuthStartOAuthNow => {
             // Enter in the device activation screen now opens the browser URL.
             if let Some(oauth) = auth.oauth.as_ref() {
                 auth.show_url_prompt = false;
-                return vec![Effect::OpenUrl { url: oauth.verification_uri.clone() }];
+                return vec![Effect::OpenUrl {
+                    url: oauth.verification_uri.clone(),
+                }];
             }
             vec![]
         }
         Action::AuthOpenOAuthUrl => {
             if let Some(oauth) = auth.oauth.as_ref() {
                 auth.show_url_prompt = false;
-                return vec![Effect::OpenUrl { url: oauth.verification_uri.clone() }];
+                return vec![Effect::OpenUrl {
+                    url: oauth.verification_uri.clone(),
+                }];
             }
             vec![]
         }
         Action::AuthCopyOAuthCode => {
             if let Some(oauth) = auth.oauth.as_ref() {
-                return vec![Effect::CopyToClipboard { text: oauth.user_code.clone() }];
+                return vec![Effect::CopyToClipboard {
+                    text: oauth.user_code.clone(),
+                }];
             }
             vec![]
         }
@@ -214,9 +226,7 @@ fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
                 category: AuthErrorCategory::Other,
                 headline: "Authentication is required".into(),
                 detail: "Public-only browsing is not supported in this build.".into(),
-                hints: vec![
-                    "Pick Personal Access Token or OAuth Device Flow to continue.".into(),
-                ],
+                hints: vec!["Pick Personal Access Token or OAuth Device Flow to continue.".into()],
             });
             auth.phase = AuthPhase::AuthFailed;
             vec![]
@@ -226,7 +236,9 @@ fn reduce_auth(app: &mut App, action: Action) -> Vec<Effect> {
 }
 
 fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
-    let AppState::Running(state) = &mut app.state else { return vec![] };
+    let AppState::Running(state) = &mut app.state else {
+        return vec![];
+    };
 
     // Modal actions get priority
     if !state.modal_stack.is_empty() {
@@ -238,9 +250,14 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
 
     match action {
         // Global
-        Action::Quit => { app.should_quit = true; vec![] }
+        Action::Quit => {
+            app.should_quit = true;
+            vec![]
+        }
         Action::OpenHelp => {
-            state.modal_stack.push(Modal::Help(crate::modals::HelpModal { scroll: 0 }));
+            state
+                .modal_stack
+                .push(Modal::Help(crate::modals::HelpModal { scroll: 0 }));
             vec![]
         }
         Action::OpenCommandPalette => {
@@ -254,8 +271,14 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             }
             vec![]
         }
-        Action::NextTab => { state.active_tab = state.active_tab.next(); vec![] }
-        Action::PrevTab => { state.active_tab = state.active_tab.prev(); vec![] }
+        Action::NextTab => {
+            state.active_tab = state.active_tab.next();
+            vec![]
+        }
+        Action::PrevTab => {
+            state.active_tab = state.active_tab.prev();
+            vec![]
+        }
         Action::SwitchTabByNumber(n) => {
             let tabs = TabKind::all();
             if n >= 1 && (n as usize) <= tabs.len() {
@@ -285,34 +308,67 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
         // Explorer
         Action::ExplorerRefresh => {
             state.tab_states.explorer.loading = true;
-            vec![Effect::DiscoverRepos { source: state.tab_states.explorer.source.clone() }]
+            vec![Effect::DiscoverRepos {
+                source: state.tab_states.explorer.source.clone(),
+            }]
         }
         Action::ExplorerToggle(idx) => {
             if let Some(r) = state.repos.get_mut(idx) {
                 r.selected = !r.selected;
                 let id = r.github_id;
                 let selected = r.selected;
-                vec![Effect::PersistRepoSelection { github_ids: vec![id], selected }]
+                vec![Effect::PersistRepoSelection {
+                    github_ids: vec![id],
+                    selected,
+                }]
             } else {
                 vec![]
             }
         }
         Action::ExplorerSelectAll => {
-            for r in state.repos.iter_mut() { r.selected = true; }
+            for r in state.repos.iter_mut() {
+                r.selected = true;
+            }
             let ids: Vec<i64> = state.repos.iter().map(|r| r.github_id).collect();
-            vec![Effect::PersistRepoSelection { github_ids: ids, selected: true }]
+            vec![Effect::PersistRepoSelection {
+                github_ids: ids,
+                selected: true,
+            }]
         }
         Action::ExplorerDeselectAll => {
-            for r in state.repos.iter_mut() { r.selected = false; }
+            for r in state.repos.iter_mut() {
+                r.selected = false;
+            }
             let ids: Vec<i64> = state.repos.iter().map(|r| r.github_id).collect();
-            vec![Effect::PersistRepoSelection { github_ids: ids, selected: false }]
+            vec![Effect::PersistRepoSelection {
+                github_ids: ids,
+                selected: false,
+            }]
         }
-        Action::ExplorerSetFilter(s) => { state.tab_states.explorer.filter_text = s; vec![] }
-        Action::ExplorerClearFilter => { state.tab_states.explorer.filter_text.clear(); vec![] }
-        Action::ExplorerSetOrgInput(s) => { state.tab_states.explorer.org_input = s; vec![] }
-        Action::ExplorerSetTopicFilter(s) => { state.tab_states.explorer.topic_filter = s; vec![] }
-        Action::ExplorerToggleSkipArchived => { state.tab_states.explorer.skip_archived = !state.tab_states.explorer.skip_archived; vec![] }
-        Action::ExplorerToggleSkipForks => { state.tab_states.explorer.skip_forks = !state.tab_states.explorer.skip_forks; vec![] }
+        Action::ExplorerSetFilter(s) => {
+            state.tab_states.explorer.filter_text = s;
+            vec![]
+        }
+        Action::ExplorerClearFilter => {
+            state.tab_states.explorer.filter_text.clear();
+            vec![]
+        }
+        Action::ExplorerSetOrgInput(s) => {
+            state.tab_states.explorer.org_input = s;
+            vec![]
+        }
+        Action::ExplorerSetTopicFilter(s) => {
+            state.tab_states.explorer.topic_filter = s;
+            vec![]
+        }
+        Action::ExplorerToggleSkipArchived => {
+            state.tab_states.explorer.skip_archived = !state.tab_states.explorer.skip_archived;
+            vec![]
+        }
+        Action::ExplorerToggleSkipForks => {
+            state.tab_states.explorer.skip_forks = !state.tab_states.explorer.skip_forks;
+            vec![]
+        }
         Action::ExplorerStartSync => {
             let selected: Vec<_> = state.repos.iter().filter(|r| r.selected).cloned().collect();
             if selected.is_empty() {
@@ -327,7 +383,11 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             state.tab_states.sync_center.queued_repos = selected.len();
             state.tab_states.sync_center.base_path = base.clone();
             state.active_tab = TabKind::SyncCenter;
-            vec![Effect::StartSync { repos: selected, base_path: base, concurrency: 8 }]
+            vec![Effect::StartSync {
+                repos: selected,
+                base_path: base,
+                concurrency: 8,
+            }]
         }
         Action::DashboardStartSync => {
             let selected: Vec<_> = state.repos.iter().filter(|r| r.selected).cloned().collect();
@@ -342,7 +402,11 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
                 state.tab_states.sync_center.phase = crate::tabs::SyncPhase::PreSync;
                 state.tab_states.sync_center.queued_repos = selected.len();
                 state.active_tab = TabKind::SyncCenter;
-                vec![Effect::StartSync { repos: selected, base_path: base, concurrency: 8 }]
+                vec![Effect::StartSync {
+                    repos: selected,
+                    base_path: base,
+                    concurrency: 8,
+                }]
             }
         }
         Action::DashboardRefreshStats => {
@@ -360,7 +424,11 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             };
             state.tab_states.sync_center.phase = crate::tabs::SyncPhase::Active;
             state.tab_states.sync_center.queued_repos = selected.len();
-            vec![Effect::StartSync { repos: selected, base_path: base, concurrency: state.tab_states.sync_center.concurrency.max(1) }]
+            vec![Effect::StartSync {
+                repos: selected,
+                base_path: base,
+                concurrency: state.tab_states.sync_center.concurrency.max(1),
+            }]
         }
         Action::SyncCancel => vec![Effect::CancelSync],
         Action::SyncPause => vec![Effect::PauseSync],
@@ -378,19 +446,24 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             vec![]
         }
         Action::SettingsNavigate(idx) => {
-            state.tab_states.settings.selected_field = idx.min(state.tab_states.settings.fields.len().saturating_sub(1));
+            state.tab_states.settings.selected_field =
+                idx.min(state.tab_states.settings.fields.len().saturating_sub(1));
             vec![]
         }
         Action::SettingsEdit(idx) => {
             if let Some(field) = state.tab_states.settings.fields.get(idx).cloned() {
                 match field.kind {
                     git_vacuum_core::SettingsFieldKind::Boolean => {
-                        let new_val = if field.value == "true" { "false" } else { "true" };
+                        let new_val = if field.value == "true" {
+                            "false"
+                        } else {
+                            "true"
+                        };
                         if let Some(f) = state.tab_states.settings.fields.get_mut(idx) {
                             f.value = new_val.to_string();
                         }
                         state.tab_states.settings.has_unsaved_changes = true;
-                        apply_setting_value(state, &field.key, &new_val);
+                        apply_setting_value(state, &field.key, new_val);
                     }
                     git_vacuum_core::SettingsFieldKind::Dropdown { options } => {
                         let current = options.iter().position(|o| o == &field.value).unwrap_or(0);
@@ -413,12 +486,16 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
         Action::SettingsToggle(idx) => {
             if let Some(field) = state.tab_states.settings.fields.get(idx).cloned() {
                 if matches!(field.kind, git_vacuum_core::SettingsFieldKind::Boolean) {
-                    let new_val = if field.value == "true" { "false" } else { "true" };
+                    let new_val = if field.value == "true" {
+                        "false"
+                    } else {
+                        "true"
+                    };
                     if let Some(f) = state.tab_states.settings.fields.get_mut(idx) {
                         f.value = new_val.to_string();
                     }
                     state.tab_states.settings.has_unsaved_changes = true;
-                    apply_setting_value(state, &field.key, &new_val);
+                    apply_setting_value(state, &field.key, new_val);
                 }
             }
             vec![]
@@ -441,7 +518,13 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
         Action::SettingsDropdownPick(_) => vec![],
         Action::SettingsSave => {
             if let Some(idx) = state.tab_states.settings.editing_field {
-                let key = state.tab_states.settings.fields.get(idx).map(|f| f.key.clone()).unwrap_or_default();
+                let key = state
+                    .tab_states
+                    .settings
+                    .fields
+                    .get(idx)
+                    .map(|f| f.key.clone())
+                    .unwrap_or_default();
                 let value = state.tab_states.settings.draft_value.clone();
                 if let Some(field) = state.tab_states.settings.fields.get_mut(idx) {
                     field.value = value.clone();
@@ -453,7 +536,10 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
             state.tab_states.settings.has_unsaved_changes = false;
             let mut effects = Vec::new();
             for field in &state.tab_states.settings.fields {
-                effects.push(Effect::SaveSetting { key: field.key.clone(), value: field.value.clone() });
+                effects.push(Effect::SaveSetting {
+                    key: field.key.clone(),
+                    value: field.value.clone(),
+                });
             }
             rebuild_settings_fields(state);
             effects
@@ -473,7 +559,9 @@ fn reduce_running(app: &mut App, action: Action) -> Vec<Effect> {
 }
 
 fn reduce_modal(app: &mut App, action: Action) -> Vec<Effect> {
-    let AppState::Running(state) = &mut app.state else { return vec![] };
+    let AppState::Running(state) = &mut app.state else {
+        return vec![];
+    };
     match action {
         Action::DismissModal | Action::ConfirmModal => {
             state.modal_stack.pop();
@@ -484,7 +572,9 @@ fn reduce_modal(app: &mut App, action: Action) -> Vec<Effect> {
 }
 
 fn reduce_command_palette(app: &mut App, action: Action) -> Vec<Effect> {
-    let AppState::Running(state) = &mut app.state else { return vec![] };
+    let AppState::Running(state) = &mut app.state else {
+        return vec![];
+    };
     match action {
         Action::CommandPaletteDismiss => {
             state.command_palette = None;
@@ -506,18 +596,26 @@ fn reduce_command_palette(app: &mut App, action: Action) -> Vec<Effect> {
             state.command_palette = None;
             if let Some(cmd) = selected_cmd {
                 match cmd {
-                    CommandAction::Quit => { app.should_quit = true; vec![] }
-                    CommandAction::SwitchTab(t) => { state.active_tab = t; vec![] }
+                    CommandAction::Quit => {
+                        app.should_quit = true;
+                        vec![]
+                    }
+                    CommandAction::SwitchTab(t) => {
+                        state.active_tab = t;
+                        vec![]
+                    }
                     CommandAction::OpenHelp => {
-                        state.modal_stack.push(Modal::Help(crate::modals::HelpModal { scroll: 0 }));
+                        state
+                            .modal_stack
+                            .push(Modal::Help(crate::modals::HelpModal { scroll: 0 }));
                         vec![]
                     }
                     CommandAction::ToggleCommandPalette => vec![], // already open
                     CommandAction::RefreshDashboard => vec![Effect::RefreshDashboardStats],
                     CommandAction::StartSync => {
                         // Trigger start sync
-                        let effects = reduce_running(app, Action::DashboardStartSync);
-                        effects
+
+                        reduce_running(app, Action::DashboardStartSync)
                     }
                     CommandAction::Logout => vec![Effect::Logout],
                 }
@@ -556,7 +654,9 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
             // Load any cached repos immediately, then kick off fresh discovery
             vec![
                 Effect::LoadReposFromDb,
-                Effect::DiscoverRepos { source: RepoSource::MyRepos },
+                Effect::DiscoverRepos {
+                    source: RepoSource::MyRepos,
+                },
                 Effect::RefreshDashboardStats,
             ]
         }
@@ -594,68 +694,143 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
         AppEvent::DiscoveryFailed { error } => {
             if let AppState::Running(state) = &mut app.state {
                 state.tab_states.explorer.loading = false;
-                state.modal_stack.push(Modal::ErrorDetail(crate::modals::ErrorDetailModal {
-                    repo_full_name: "Discovery".into(),
-                    error_message: error,
-                    raw_output: String::new(),
-                }));
+                state
+                    .modal_stack
+                    .push(Modal::ErrorDetail(crate::modals::ErrorDetailModal {
+                        repo_full_name: "Discovery".into(),
+                        error_message: error,
+                        raw_output: String::new(),
+                    }));
             }
             vec![]
         }
-        AppEvent::SyncCloneStarted { job_id, repo_full_name } => {
+        AppEvent::SyncCloneStarted {
+            job_id,
+            repo_full_name,
+        } => {
             log_event(app, job_id, repo_full_name, LogStatus::Active, "cloning…");
             vec![]
         }
-        AppEvent::SyncCloneProgress { job_id, repo_full_name, bytes, total } => {
+        AppEvent::SyncCloneProgress {
+            job_id,
+            repo_full_name: _,
+            bytes,
+            total,
+        } => {
             if let AppState::Running(state) = &mut app.state {
-                if let Some(entry) = state.tab_states.sync_center.live_log.iter_mut().find(|e| e.job_id == job_id) {
+                if let Some(entry) = state
+                    .tab_states
+                    .sync_center
+                    .live_log
+                    .iter_mut()
+                    .find(|e| e.job_id == job_id)
+                {
                     entry.detail = format!("{} / {}", human_bytes(bytes), human_bytes(total));
                 }
             }
             vec![]
         }
-        AppEvent::SyncCloneCompleted { job_id, repo_full_name, size_bytes, .. } => {
+        AppEvent::SyncCloneCompleted {
+            job_id,
+            repo_full_name: _,
+            size_bytes,
+            ..
+        } => {
             if let AppState::Running(state) = &mut app.state {
-                if let Some(entry) = state.tab_states.sync_center.live_log.iter_mut().find(|e| e.job_id == job_id) {
+                if let Some(entry) = state
+                    .tab_states
+                    .sync_center
+                    .live_log
+                    .iter_mut()
+                    .find(|e| e.job_id == job_id)
+                {
                     entry.status = LogStatus::Success;
                     entry.detail = format!("cloned ({})", human_bytes(size_bytes));
                 }
             }
             vec![]
         }
-        AppEvent::SyncFetchStarted { job_id, repo_full_name } => {
+        AppEvent::SyncFetchStarted {
+            job_id,
+            repo_full_name,
+        } => {
             log_event(app, job_id, repo_full_name, LogStatus::Active, "fetching…");
             vec![]
         }
-        AppEvent::SyncFetchProgress { job_id, repo_full_name: _, bytes } => {
+        AppEvent::SyncFetchProgress {
+            job_id,
+            repo_full_name: _,
+            bytes,
+        } => {
             if let AppState::Running(state) = &mut app.state {
-                if let Some(entry) = state.tab_states.sync_center.live_log.iter_mut().find(|e| e.job_id == job_id) {
+                if let Some(entry) = state
+                    .tab_states
+                    .sync_center
+                    .live_log
+                    .iter_mut()
+                    .find(|e| e.job_id == job_id)
+                {
                     entry.detail = format!("fetched {}", human_bytes(bytes));
                 }
             }
             vec![]
         }
-        AppEvent::SyncFetchCompleted { job_id, repo_full_name, new_commits, bytes_fetched, .. } => {
+        AppEvent::SyncFetchCompleted {
+            job_id,
+            repo_full_name: _,
+            new_commits,
+            bytes_fetched,
+            ..
+        } => {
             if let AppState::Running(state) = &mut app.state {
-                if let Some(entry) = state.tab_states.sync_center.live_log.iter_mut().find(|e| e.job_id == job_id) {
+                if let Some(entry) = state
+                    .tab_states
+                    .sync_center
+                    .live_log
+                    .iter_mut()
+                    .find(|e| e.job_id == job_id)
+                {
                     entry.status = LogStatus::Success;
-                    entry.detail = format!("synced (+{} commits, {})", new_commits, human_bytes(bytes_fetched));
+                    entry.detail = format!(
+                        "synced (+{} commits, {})",
+                        new_commits,
+                        human_bytes(bytes_fetched)
+                    );
                 }
             }
             vec![]
         }
-        AppEvent::SyncRepoFailed { job_id, repo_full_name, error } => {
+        AppEvent::SyncRepoFailed {
+            job_id,
+            repo_full_name: _,
+            error,
+        } => {
             if let AppState::Running(state) = &mut app.state {
-                if let Some(entry) = state.tab_states.sync_center.live_log.iter_mut().find(|e| e.job_id == job_id) {
+                if let Some(entry) = state
+                    .tab_states
+                    .sync_center
+                    .live_log
+                    .iter_mut()
+                    .find(|e| e.job_id == job_id)
+                {
                     entry.status = LogStatus::Failed;
                     entry.detail = error;
                 }
             }
             vec![]
         }
-        AppEvent::SyncRepoUpToDate { job_id, repo_full_name } => {
+        AppEvent::SyncRepoUpToDate {
+            job_id,
+            repo_full_name: _,
+        } => {
             if let AppState::Running(state) = &mut app.state {
-                if let Some(entry) = state.tab_states.sync_center.live_log.iter_mut().find(|e| e.job_id == job_id) {
+                if let Some(entry) = state
+                    .tab_states
+                    .sync_center
+                    .live_log
+                    .iter_mut()
+                    .find(|e| e.job_id == job_id)
+                {
                     entry.status = LogStatus::Success;
                     entry.detail = "up to date".into();
                 }
@@ -733,7 +908,11 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
             }
             vec![]
         }
-        AppEvent::OAuthCodeReceived { user_code, verification_uri, expires_in } => {
+        AppEvent::OAuthCodeReceived {
+            user_code,
+            verification_uri,
+            expires_in,
+        } => {
             if let AppState::Auth(auth) = &mut app.state {
                 auth.loading = false;
                 auth.mode = AuthMode::OAuth;
@@ -772,16 +951,16 @@ pub fn reduce_event(app: &mut App, event: AppEvent) -> Vec<Effect> {
                     category: AuthErrorCategory::Other,
                     headline: "OAuth code expired".into(),
                     detail: "The device code expired before you authorized. Try again.".into(),
-                    hints: vec![
-                        "Press Enter to go back to the device activation screen.".into(),
-                    ],
+                    hints: vec!["Press Enter to go back to the device activation screen.".into()],
                 });
             }
             vec![]
         }
         AppEvent::LoggedOut => {
-            let mut auth = AuthScreenState::default();
-            auth.oauth_client_id = app.oauth_client_id.clone();
+            let auth = AuthScreenState {
+                oauth_client_id: app.oauth_client_id.clone(),
+                ..Default::default()
+            };
             app.state = AppState::Auth(auth);
             vec![]
         }
@@ -878,13 +1057,18 @@ fn rebuild_settings_fields(state: &mut RunningAppState) {
                 key: "timeout_secs".into(),
                 label: "Timeout per job (seconds)".into(),
                 value: "1800".into(),
-                kind: git_vacuum_core::SettingsFieldKind::Integer { min: 60, max: 86400 },
+                kind: git_vacuum_core::SettingsFieldKind::Integer {
+                    min: 60,
+                    max: 86400,
+                },
                 help: Some("Max seconds allowed for one clone/fetch job.".into()),
             });
         }
     }
     state.tab_states.settings.fields = fields;
-    if state.tab_states.settings.selected_field >= state.tab_states.settings.fields.len() && !state.tab_states.settings.fields.is_empty() {
+    if state.tab_states.settings.selected_field >= state.tab_states.settings.fields.len()
+        && !state.tab_states.settings.fields.is_empty()
+    {
         state.tab_states.settings.selected_field = 0;
     }
 }
@@ -912,18 +1096,34 @@ fn apply_setting_value(state: &mut RunningAppState, key: &str, value: &str) {
     }
 }
 
-fn log_event(app: &mut App, job_id: JobId, repo_full_name: String, status: LogStatus, detail: &str) {
+fn log_event(
+    app: &mut App,
+    job_id: JobId,
+    repo_full_name: String,
+    status: LogStatus,
+    detail: &str,
+) {
     if let AppState::Running(state) = &mut app.state {
-        if let Some(entry) = state.tab_states.sync_center.live_log.iter_mut().find(|e| e.job_id == job_id) {
+        if let Some(entry) = state
+            .tab_states
+            .sync_center
+            .live_log
+            .iter_mut()
+            .find(|e| e.job_id == job_id)
+        {
             entry.status = status;
             entry.detail = detail.to_string();
         } else {
-            state.tab_states.sync_center.live_log.push(crate::tabs::LogEntry {
-                job_id,
-                repo_full_name,
-                status,
-                detail: detail.to_string(),
-            });
+            state
+                .tab_states
+                .sync_center
+                .live_log
+                .push(crate::tabs::LogEntry {
+                    job_id,
+                    repo_full_name,
+                    status,
+                    detail: detail.to_string(),
+                });
             // Trim to last 500
             let log_len = state.tab_states.sync_center.live_log.len();
             if log_len > 500 {
@@ -946,18 +1146,24 @@ fn classify_auth_error(reason: &str, detail: &str) -> AuthErrorView {
     let detail_lower = detail.to_lowercase();
 
     let (category, headline) = match reason {
-        "oauth_init_failed" | "oauth_validate_failed" => {
-            (AuthErrorCategory::OAuthConfig, "OAuth setup failed".to_string())
-        }
-        "oauth_poll_failed" => {
-            (AuthErrorCategory::OAuthConfig, "OAuth polling failed".to_string())
-        }
-        "access_denied" => {
-            (AuthErrorCategory::AccessDenied, "Authorization denied".to_string())
-        }
+        "oauth_init_failed" | "oauth_validate_failed" => (
+            AuthErrorCategory::OAuthConfig,
+            "OAuth setup failed".to_string(),
+        ),
+        "oauth_poll_failed" => (
+            AuthErrorCategory::OAuthConfig,
+            "OAuth polling failed".to_string(),
+        ),
+        "access_denied" => (
+            AuthErrorCategory::AccessDenied,
+            "Authorization denied".to_string(),
+        ),
         _ => {
             if detail_lower.contains("scope") {
-                (AuthErrorCategory::InsufficientScopes, "Token missing required scopes".to_string())
+                (
+                    AuthErrorCategory::InsufficientScopes,
+                    "Token missing required scopes".to_string(),
+                )
             } else if detail_lower.contains("expired") {
                 (AuthErrorCategory::ExpiredToken, "Token expired".to_string())
             } else if detail_lower.contains("network") || detail_lower.contains("timeout") {
@@ -973,9 +1179,9 @@ fn classify_auth_error(reason: &str, detail: &str) -> AuthErrorView {
             "Verify the token at https://github.com/settings/tokens".into(),
             "Make sure the token starts with ghp_ or github_pat_.".into(),
         ],
-        AuthErrorCategory::ExpiredToken => vec![
-            "Generate a new token at https://github.com/settings/tokens".into(),
-        ],
+        AuthErrorCategory::ExpiredToken => {
+            vec!["Generate a new token at https://github.com/settings/tokens".into()]
+        }
         AuthErrorCategory::InsufficientScopes => vec![
             "Required scopes: repo, read:org, user".into(),
             "Re-generate the token with these scopes enabled.".into(),
@@ -988,9 +1194,9 @@ fn classify_auth_error(reason: &str, detail: &str) -> AuthErrorView {
             "Register an OAuth App at https://github.com/settings/applications/new".into(),
             "Set GIT_VACUUM_OAUTH_CLIENT_ID or pass --oauth-client-id <id>.".into(),
         ],
-        AuthErrorCategory::AccessDenied => vec![
-            "Re-run the flow and click 'Authorize' on the GitHub page.".into(),
-        ],
+        AuthErrorCategory::AccessDenied => {
+            vec!["Re-run the flow and click 'Authorize' on the GitHub page.".into()]
+        }
         AuthErrorCategory::Other => Vec::new(),
     };
 
@@ -1004,16 +1210,24 @@ fn classify_auth_error(reason: &str, detail: &str) -> AuthErrorView {
 
 // Public re-exports for binary crate to call service functions
 pub use git_vacuum_service as service;
-pub async fn auth_pat(app: &App, token: String) -> Result<git_vacuum_core::UserInfo, git_vacuum_core::AuthError> {
+pub async fn auth_pat(
+    app: &App,
+    token: String,
+) -> Result<git_vacuum_core::UserInfo, git_vacuum_core::AuthError> {
     authenticate_pat(app.services.clone(), &token).await
 }
-pub async fn load_creds(app: &App) -> Result<Option<git_vacuum_core::UserInfo>, git_vacuum_core::AuthError> {
+pub async fn load_creds(
+    app: &App,
+) -> Result<Option<git_vacuum_core::UserInfo>, git_vacuum_core::AuthError> {
     load_stored_credentials(app.services.clone()).await
 }
 pub async fn do_logout(app: &App) -> Result<(), git_vacuum_core::KeyringError> {
     logout(app.services.clone()).await
 }
-pub async fn do_discover(app: &App, source: git_vacuum_core::RepoSource) -> Result<Vec<git_vacuum_core::RepoEntry>, git_vacuum_core::DiscoveryError> {
+pub async fn do_discover(
+    app: &App,
+    source: git_vacuum_core::RepoSource,
+) -> Result<Vec<git_vacuum_core::RepoEntry>, git_vacuum_core::DiscoveryError> {
     run_discovery(app.services.clone(), source).await
 }
 
@@ -1028,7 +1242,7 @@ pub async fn do_discover(app: &App, source: git_vacuum_core::RepoSource) -> Resu
 
 #[cfg(test)]
 mod tests {
-#[test]
+    #[test]
     fn placeholder_compiles() {
         // Real reducer tests live in the binary crate (see TODO in plan).
     }

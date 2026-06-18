@@ -4,13 +4,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use git_vacuum_app::state::WelcomePhase;
-use git_vacuum_core::UserInfo;
 use crate::components::{dots_frame, progress_bar, spinner_frame};
 use crate::theme::{
     COLOR_ACCENT, COLOR_BG_BANNER, COLOR_BG_PANEL, COLOR_ERROR, COLOR_MUTED, COLOR_PRIMARY,
     COLOR_PRIMARY_BRIGHT, COLOR_SUCCESS_BRIGHT, COLOR_WARNING_BRIGHT,
 };
+use git_vacuum_app::state::WelcomePhase;
+use git_vacuum_core::UserInfo;
 
 const LOGO: &[&str] = &[
     "  ⬢   ⬡   ⬢   ⬡   ⬢",
@@ -41,12 +41,12 @@ pub fn render_welcome(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(6),  // logo
-            Constraint::Length(2),  // greeting
-            Constraint::Length(2),  // spinner + status
-            Constraint::Length(3),  // progress (Summary phase only)
-            Constraint::Length(2),  // hint
-            Constraint::Length(1),  // prompt
+            Constraint::Length(6), // logo
+            Constraint::Length(2), // greeting
+            Constraint::Length(2), // spinner + status
+            Constraint::Length(3), // progress (Summary phase only)
+            Constraint::Length(2), // hint
+            Constraint::Length(1), // prompt
         ])
         .margin(2)
         .split(panel);
@@ -54,7 +54,14 @@ pub fn render_welcome(
     // Logo
     let logo_lines: Vec<Line> = LOGO
         .iter()
-        .map(|l| Line::from(Span::styled(*l, Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD))))
+        .map(|l| {
+            Line::from(Span::styled(
+                *l,
+                Style::default()
+                    .fg(COLOR_PRIMARY_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ))
+        })
         .collect();
     let logo = Paragraph::new(logo_lines)
         .alignment(ratatui::layout::Alignment::Center)
@@ -69,7 +76,9 @@ pub fn render_welcome(
     };
     let greeting = Paragraph::new(Line::from(Span::styled(
         greeting_text,
-        Style::default().fg(COLOR_SUCCESS_BRIGHT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(COLOR_SUCCESS_BRIGHT)
+            .add_modifier(Modifier::BOLD),
     )))
     .alignment(ratatui::layout::Alignment::Center)
     .block(Block::default().borders(Borders::NONE));
@@ -77,8 +86,16 @@ pub fn render_welcome(
 
     // Spinner + status
     let spinner_text = match phase {
-        WelcomePhase::Greeting => format!("{} Connecting to GitHub{}", spinner_frame(tick), dots_frame(tick)),
-        WelcomePhase::Summary => format!("{} Loading your repositories{}", spinner_frame(tick), dots_frame(tick)),
+        WelcomePhase::Greeting => format!(
+            "{} Connecting to GitHub{}",
+            spinner_frame(tick),
+            dots_frame(tick)
+        ),
+        WelcomePhase::Summary => format!(
+            "{} Loading your repositories{}",
+            spinner_frame(tick),
+            dots_frame(tick)
+        ),
         WelcomePhase::Ready => format!("{} Setup complete", spinner_frame(tick)),
     };
     let spinner = Paragraph::new(Line::from(Span::styled(
@@ -124,7 +141,9 @@ pub fn render_welcome(
     let prompt = if matches!(phase, WelcomePhase::Ready) {
         Paragraph::new(Line::from(Span::styled(
             "[ press any key to continue ]",
-            Style::default().fg(COLOR_WARNING_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_WARNING_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         )))
         .alignment(ratatui::layout::Alignment::Center)
     } else {
@@ -138,7 +157,9 @@ pub fn render_welcome(
         .border_style(Style::default().fg(COLOR_PRIMARY))
         .title(Span::styled(
             " git-vacuum ",
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(outer, panel);
 

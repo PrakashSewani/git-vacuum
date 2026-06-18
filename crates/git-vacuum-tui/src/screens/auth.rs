@@ -4,7 +4,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::Frame;
 
-use git_vacuum_app::state::{AuthErrorCategory, AuthMethodChoice, AuthPhase, AuthScreenState};
 use crate::components::{
     auth_action_button, big_code_lines, dots_frame, format_countdown, hints_list, key_hint,
     spinner_frame,
@@ -14,6 +13,7 @@ use crate::theme::{
     COLOR_LINK, COLOR_MUTED, COLOR_PRIMARY, COLOR_PRIMARY_BRIGHT, COLOR_SUCCESS_BRIGHT,
     COLOR_WARNING_BRIGHT,
 };
+use git_vacuum_app::state::{AuthErrorCategory, AuthMethodChoice, AuthPhase, AuthScreenState};
 
 /// Top-level dispatcher. Matches the design doc §7 phases.
 pub fn render_auth(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: u64) {
@@ -32,7 +32,7 @@ pub fn render_auth(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: u64
 fn auth_panel(f: &mut Frame, area: Rect) -> (Rect, Rect) {
     let panel_w = 70u16.min(area.width.saturating_sub(2));
     let max_h = area.height.saturating_sub(2);
-    let panel_h = max_h.min(22).max(10);
+    let panel_h = max_h.clamp(10, 22);
     let outer = Rect {
         x: area.x + (area.width.saturating_sub(panel_w)) / 2,
         y: area.y + (area.height.saturating_sub(panel_h)) / 2,
@@ -52,9 +52,7 @@ fn auth_panel(f: &mut Frame, area: Rect) -> (Rect, Rect) {
 fn panel_border_style(state: &AuthScreenState) -> Style {
     if state.phase == AuthPhase::AuthFailed {
         Style::default().fg(COLOR_ERROR_BRIGHT)
-    } else if state.phase == AuthPhase::Validating {
-        Style::default().fg(COLOR_ACCENT)
-    } else if state.phase == AuthPhase::DeviceActivation {
+    } else if state.phase == AuthPhase::Validating || state.phase == AuthPhase::DeviceActivation {
         Style::default().fg(COLOR_ACCENT)
     } else {
         Style::default().fg(COLOR_PRIMARY_BRIGHT)
@@ -76,7 +74,9 @@ fn render_brand(f: &mut Frame, area: Rect, tick: u64) {
     let brand = Paragraph::new(Line::from(vec![
         Span::styled(
             " ⬢ git-vacuum ",
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled("  GitHub Backup & Sync", Style::default().fg(COLOR_MUTED)),
         Span::raw("    "),
@@ -162,15 +162,15 @@ fn render_method_picker(f: &mut Frame, area: Rect, state: &AuthScreenState, tick
         };
         let desc_style = if *disabled {
             Style::default().fg(COLOR_DISABLED)
-        } else if is_cursor {
-            Style::default().fg(COLOR_MUTED)
         } else {
             Style::default().fg(COLOR_MUTED)
         };
         let tag_style = if *disabled {
             Style::default().fg(COLOR_DISABLED)
         } else if is_cursor {
-            Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(COLOR_ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(COLOR_MUTED)
         };
@@ -192,7 +192,10 @@ fn render_method_picker(f: &mut Frame, area: Rect, state: &AuthScreenState, tick
         Span::styled("read:org", Style::default().fg(COLOR_SUCCESS_BRIGHT)),
         Span::styled("  ", Style::default()),
         Span::styled("user", Style::default().fg(COLOR_SUCCESS_BRIGHT)),
-        Span::styled("    (read-only is sufficient)", Style::default().fg(COLOR_MUTED)),
+        Span::styled(
+            "    (read-only is sufficient)",
+            Style::default().fg(COLOR_MUTED),
+        ),
     ]))
     .alignment(ratatui::layout::Alignment::Left);
     f.render_widget(scope, chunks[6]);
@@ -213,7 +216,9 @@ fn render_method_picker(f: &mut Frame, area: Rect, state: &AuthScreenState, tick
         .border_style(panel_border_style(state))
         .title(Span::styled(
             panel_title(state),
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(border, outer);
 }
@@ -269,11 +274,17 @@ fn render_pat_input(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: u6
         Line::from(vec![
             Span::styled("  Press Enter to submit", Style::default().fg(COLOR_MUTED)),
             Span::styled("    ·    ", Style::default().fg(COLOR_MUTED)),
-            Span::styled("Press 'o' to sign in with browser", Style::default().fg(COLOR_PRIMARY_BRIGHT)),
+            Span::styled(
+                "Press 'o' to sign in with browser",
+                Style::default().fg(COLOR_PRIMARY_BRIGHT),
+            ),
         ])
     } else {
         Line::from(vec![
-            Span::styled(format!("  {len} chars"), Style::default().fg(COLOR_SUCCESS_BRIGHT)),
+            Span::styled(
+                format!("  {len} chars"),
+                Style::default().fg(COLOR_SUCCESS_BRIGHT),
+            ),
             Span::styled(
                 "   ·   Press Enter to submit, Backspace to delete, 'o' for OAuth",
                 Style::default().fg(COLOR_MUTED),
@@ -296,7 +307,9 @@ fn render_pat_input(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: u6
         .border_style(panel_border_style(state))
         .title(Span::styled(
             panel_title(state),
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(border, outer);
 }
@@ -329,7 +342,9 @@ fn render_validating(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: u
             spinner_frame(tick),
             dots_frame(tick)
         ),
-        Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(COLOR_ACCENT)
+            .add_modifier(Modifier::BOLD),
     )));
     f.render_widget(headline, chunks[2]);
 
@@ -349,7 +364,10 @@ fn render_validating(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: u
             "Fetching user profile",
             Style::default().fg(COLOR_PRIMARY_BRIGHT),
         ),
-        Span::styled(dots_frame(tick + 2), Style::default().fg(COLOR_PRIMARY_BRIGHT)),
+        Span::styled(
+            dots_frame(tick + 2),
+            Style::default().fg(COLOR_PRIMARY_BRIGHT),
+        ),
     ]);
     let steps = Paragraph::new(vec![step1, Line::from(""), step2]);
     f.render_widget(steps, chunks[4]);
@@ -368,7 +386,9 @@ fn render_validating(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: u
         .border_style(panel_border_style(state))
         .title(Span::styled(
             panel_title(state),
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(border, outer);
 }
@@ -447,11 +467,20 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
         Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                format!("{} Waiting for authorization{}", spinner_frame(tick), dots_frame(tick)),
+                format!(
+                    "{} Waiting for authorization{}",
+                    spinner_frame(tick),
+                    dots_frame(tick)
+                ),
                 Style::default().fg(COLOR_ACCENT),
             ),
             Span::styled("    (timeout in ", Style::default().fg(COLOR_MUTED)),
-            Span::styled(countdown, Style::default().fg(COLOR_WARNING_BRIGHT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                countdown,
+                Style::default()
+                    .fg(COLOR_WARNING_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(")", Style::default().fg(COLOR_MUTED)),
         ])
     } else {
@@ -488,7 +517,9 @@ fn render_device_activation(f: &mut Frame, area: Rect, state: &AuthScreenState, 
         .border_style(panel_border_style(state))
         .title(Span::styled(
             panel_title(state),
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(border, outer);
 
@@ -507,7 +538,9 @@ fn render_url_prompt(f: &mut Frame, area: Rect, url: &str) {
         .border_style(Style::default().fg(COLOR_ACCENT))
         .title(Span::styled(
             " Open browser? ",
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(popup);
     f.render_widget(block, popup);
@@ -515,7 +548,9 @@ fn render_url_prompt(f: &mut Frame, area: Rect, url: &str) {
     let text = Paragraph::new(vec![
         Line::from(vec![Span::styled(
             "Open GitHub device activation page",
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(vec![Span::styled(
             "in your default browser?",
@@ -524,7 +559,9 @@ fn render_url_prompt(f: &mut Frame, area: Rect, url: &str) {
         Line::from(""),
         Line::from(vec![Span::styled(
             url,
-            Style::default().fg(COLOR_LINK).add_modifier(Modifier::UNDERLINED),
+            Style::default()
+                .fg(COLOR_LINK)
+                .add_modifier(Modifier::UNDERLINED),
         )]),
     ]);
     f.render_widget(text, inner);
@@ -569,24 +606,22 @@ fn render_auth_failed(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: 
     } else {
         1
     };
-    let hints_h = err
-        .map(|e| e.hints.len() as u16 * 2)
-        .unwrap_or(0);
+    let hints_h = err.map(|e| e.hints.len() as u16 * 2).unwrap_or(0);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // brand
-            Constraint::Length(1),  // spacer
-            Constraint::Length(2),  // ✗ + headline
-            Constraint::Length(1),  // spacer
+            Constraint::Length(1),                      // brand
+            Constraint::Length(1),                      // spacer
+            Constraint::Length(2),                      // ✗ + headline
+            Constraint::Length(1),                      // spacer
             Constraint::Length(detail_h.min(6) as u16), // detail
-            Constraint::Length(1),  // spacer
-            Constraint::Length(hints_h.min(8) as u16),  // hints
-            Constraint::Length(1),  // spacer
-            Constraint::Length(3),  // buttons row
+            Constraint::Length(1),                      // spacer
+            Constraint::Length(hints_h.min(8)),         // hints
+            Constraint::Length(1),                      // spacer
+            Constraint::Length(3),                      // buttons row
             Constraint::Min(0),
-            Constraint::Length(1),  // key bar
+            Constraint::Length(1), // key bar
         ])
         .split(inner);
 
@@ -594,9 +629,15 @@ fn render_auth_failed(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: 
 
     // ✗ + headline
     let headline = Paragraph::new(Line::from(vec![
-        Span::styled("  ✗  ", Style::default().fg(COLOR_ERROR_BRIGHT).add_modifier(Modifier::BOLD)),
         Span::styled(
-            err.map(|e| e.headline.as_str()).unwrap_or("Authentication failed"),
+            "  ✗  ",
+            Style::default()
+                .fg(COLOR_ERROR_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            err.map(|e| e.headline.as_str())
+                .unwrap_or("Authentication failed"),
             Style::default()
                 .fg(COLOR_ERROR_BRIGHT)
                 .add_modifier(Modifier::BOLD),
@@ -657,7 +698,9 @@ fn render_auth_failed(f: &mut Frame, area: Rect, state: &AuthScreenState, tick: 
         .border_style(panel_border_style(state))
         .title(Span::styled(
             panel_title(state),
-            Style::default().fg(COLOR_ERROR_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_ERROR_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(border, outer);
 

@@ -132,7 +132,11 @@ fn row_to_repo(row: &Row<'_>) -> rusqlite::Result<RepoRow> {
         clone_url_ssh: row.get("clone_url_ssh")?,
         clone_url_https: row.get("clone_url_https")?,
         size_kb: row.get("size_kb")?,
-        pushed_at: pushed_at.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))),
+        pushed_at: pushed_at.and_then(|s| {
+            DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .map(|d| d.with_timezone(&Utc))
+        }),
         created_at: DateTime::parse_from_rfc3339(&created_at)
             .map(|d| d.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now()),
@@ -142,7 +146,11 @@ fn row_to_repo(row: &Row<'_>) -> rusqlite::Result<RepoRow> {
         clone_status: parse_clone_status(&clone_status),
         local_path: row.get("local_path")?,
         local_size_kb: row.get("local_size_kb")?,
-        last_synced_at: last_synced_at.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))),
+        last_synced_at: last_synced_at.and_then(|s| {
+            DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .map(|d| d.with_timezone(&Utc))
+        }),
         last_error: row.get("last_error")?,
         behind_count: row.get("behind_count")?,
         selected: selected != 0,
@@ -210,7 +218,9 @@ pub fn set_repos_selected(
     if github_ids.is_empty() {
         return Ok(());
     }
-    let placeholders: Vec<String> = (0..github_ids.len()).map(|i| format!("?{}", i + 2)).collect();
+    let placeholders: Vec<String> = (0..github_ids.len())
+        .map(|i| format!("?{}", i + 2))
+        .collect();
     let sql = format!(
         "UPDATE repos SET selected = ?1 WHERE github_id IN ({})",
         placeholders.join(",")
@@ -220,15 +230,15 @@ pub fn set_repos_selected(
     for id in github_ids {
         params_vec.push(Box::new(*id));
     }
-    let refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref() as &dyn rusqlite::ToSql).collect();
+    let refs: Vec<&dyn rusqlite::ToSql> = params_vec
+        .iter()
+        .map(|p| p.as_ref() as &dyn rusqlite::ToSql)
+        .collect();
     conn.execute(&sql, refs.as_slice())?;
     Ok(())
 }
 
-pub fn mark_repo_deleted_on_remote(
-    conn: &Connection,
-    github_id: i64,
-) -> Result<(), SqliteErr> {
+pub fn mark_repo_deleted_on_remote(conn: &Connection, github_id: i64) -> Result<(), SqliteErr> {
     conn.execute(
         "UPDATE repos SET deleted_on_remote = 1 WHERE github_id = ?1",
         params![github_id],

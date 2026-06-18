@@ -109,5 +109,7 @@ fn row_to_run(row: &Row<'_>) -> rusqlite::Result<SyncRunRow> {
 }
 
 fn parse_dt(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }

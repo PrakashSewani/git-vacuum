@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use git2::{FetchOptions, RemoteCallbacks, Repository};
 use git_vacuum_core::{
     CloneStats, FetchResult, GitError, GitOps, JobId, JobPhase, LocalRepoStatus, ProgressSample,
 };
-use git2::{FetchOptions, RemoteCallbacks, Repository};
 use parking_lot::Mutex;
 
 pub struct Git2GitOps;
@@ -35,6 +35,7 @@ pub(crate) fn map_git_err(e: git2::Error) -> GitError {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn build_callback(
     on_progress: Arc<Mutex<Option<Box<dyn Fn(ProgressSample) + Send + Sync>>>>,
 ) -> impl FnMut(git2::Progress<'_>) -> bool + Send + 'static {
@@ -73,12 +74,14 @@ impl GitOps for Git2GitOps {
         mut cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Result<CloneStats, GitError> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| GitError::Internal(format!("create_dir_all: {e}")))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| GitError::Internal(format!("create_dir_all: {e}")))?;
         }
 
         let url_owned = url.to_string();
         let path_owned = path.to_path_buf();
-        let cb_slot: Arc<Mutex<Option<Box<dyn Fn(ProgressSample) + Send + Sync>>>> = Arc::new(Mutex::new(Some(on_progress)));
+        let cb_slot: Arc<Mutex<Option<Box<dyn Fn(ProgressSample) + Send + Sync>>>> =
+            Arc::new(Mutex::new(Some(on_progress)));
 
         let result = tokio::task::spawn_blocking(move || -> Result<CloneStats, git2::Error> {
             let started = Instant::now();
@@ -89,7 +92,7 @@ impl GitOps for Git2GitOps {
             callbacks.transfer_progress(cb);
             fetch_opts.remote_callbacks(callbacks);
             opts.fetch_options(fetch_opts);
-            let mut repo = opts.clone(&url_owned, &path_owned)?;
+            let repo = opts.clone(&url_owned, &path_owned)?;
             // Reset HEAD to match default branch from the clone.
             if let Ok(head_ref) = repo.head() {
                 if let Some(target) = head_ref.target() {
@@ -109,7 +112,10 @@ impl GitOps for Git2GitOps {
         .map_err(|e| GitError::Internal(format!("join: {e}")))?;
 
         if *cancel.borrow_and_update() {
-            return Ok(CloneStats { cancelled: true, ..Default::default() });
+            return Ok(CloneStats {
+                cancelled: true,
+                ..Default::default()
+            });
         }
         result.map_err(map_git_err)
     }
@@ -121,7 +127,8 @@ impl GitOps for Git2GitOps {
         mut cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Result<FetchResult, GitError> {
         let path_owned = path.to_path_buf();
-        let cb_slot: Arc<Mutex<Option<Box<dyn Fn(ProgressSample) + Send + Sync>>>> = Arc::new(Mutex::new(Some(on_progress)));
+        let cb_slot: Arc<Mutex<Option<Box<dyn Fn(ProgressSample) + Send + Sync>>>> =
+            Arc::new(Mutex::new(Some(on_progress)));
 
         let result = tokio::task::spawn_blocking(move || -> Result<FetchResult, git2::Error> {
             let started = Instant::now();
@@ -134,10 +141,15 @@ impl GitOps for Git2GitOps {
             fetch_opts.remote_callbacks(callbacks);
             remote.fetch(&["refs/heads/*:refs/heads/*"], Some(&mut fetch_opts), None)?;
             let stats = remote.stats();
-            let fetch_head = repo.find_reference("FETCH_HEAD").ok().and_then(|r| r.target());
+            let fetch_head = repo
+                .find_reference("FETCH_HEAD")
+                .ok()
+                .and_then(|r| r.target());
             let head_oid = repo.head()?.target();
             let new_commits = match (head_oid, fetch_head) {
-                (Some(h), Some(f)) if h != f => repo.graph_ahead_behind(h, f).map(|(_, b)| b).unwrap_or(0),
+                (Some(h), Some(f)) if h != f => {
+                    repo.graph_ahead_behind(h, f).map(|(_, b)| b).unwrap_or(0)
+                }
                 _ => 0,
             };
             Ok(FetchResult {
@@ -153,7 +165,10 @@ impl GitOps for Git2GitOps {
         .map_err(|e| GitError::Internal(format!("join: {e}")))?;
 
         if *cancel.borrow_and_update() {
-            return Ok(FetchResult { cancelled: true, ..Default::default() });
+            return Ok(FetchResult {
+                cancelled: true,
+                ..Default::default()
+            });
         }
         result.map_err(map_git_err)
     }
@@ -180,7 +195,12 @@ impl GitOps for Git2GitOps {
             ))?;
             let clean = status.is_empty();
             let size_kb = dir_size_kb(&path_owned).unwrap_or(0);
-            Ok(LocalRepoStatus { behind_count: behind, ahead_count: ahead, clean, size_kb })
+            Ok(LocalRepoStatus {
+                behind_count: behind,
+                ahead_count: ahead,
+                clean,
+                size_kb,
+            })
         })
         .await
         .map_err(|e| GitError::Internal(format!("join: {e}")))?;
@@ -193,7 +213,8 @@ impl GitOps for Git2GitOps {
 
     fn remove_repo(&self, path: &Path) -> Result<(), GitError> {
         if path.exists() {
-            std::fs::remove_dir_all(path).map_err(|e| GitError::Internal(format!("remove_dir_all: {e}")))?;
+            std::fs::remove_dir_all(path)
+                .map_err(|e| GitError::Internal(format!("remove_dir_all: {e}")))?;
         }
         Ok(())
     }
@@ -227,13 +248,24 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_id() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
     }
 
     fn make_bare_repo() -> PathBuf {
         // Create a normal repo, add a file, commit, then make a bare clone of it.
-        let work = std::env::temp_dir().join(format!("gv-test-work-{}-{}", std::process::id(), unique_id()));
-        let bare = std::env::temp_dir().join(format!("gv-test-bare-{}-{}", std::process::id(), unique_id()));
+        let work = std::env::temp_dir().join(format!(
+            "gv-test-work-{}-{}",
+            std::process::id(),
+            unique_id()
+        ));
+        let bare = std::env::temp_dir().join(format!(
+            "gv-test-bare-{}-{}",
+            std::process::id(),
+            unique_id()
+        ));
         let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(&bare);
         std::fs::create_dir_all(&work).unwrap();
@@ -246,7 +278,8 @@ mod tests {
         let tree_oid = index.write_tree().unwrap();
         let tree = repo.find_tree(tree_oid).unwrap();
         let sig = git2::Signature::now("Test", "test@example.com").unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
 
         // Now clone bare
         let mut opts = git2::build::RepoBuilder::new();
@@ -269,16 +302,17 @@ mod tests {
     #[tokio::test]
     async fn clone_progress_works() {
         let bare = make_bare_repo();
-        let dest = std::env::temp_dir().join(format!("gv-test-clone-{}-{}", std::process::id(), unique_id()));
+        let dest = std::env::temp_dir().join(format!(
+            "gv-test-clone-{}-{}",
+            std::process::id(),
+            unique_id()
+        ));
         let _ = std::fs::remove_dir_all(&dest);
         let ops = Git2GitOps::new();
         let (_tx, rx) = tokio::sync::watch::channel(false);
-        let stats = ops.clone_with_progress(
-            bare.to_str().unwrap(),
-            &dest,
-            Box::new(|_sample| {}),
-            rx,
-        ).await;
+        let stats = ops
+            .clone_with_progress(bare.to_str().unwrap(), &dest, Box::new(|_sample| {}), rx)
+            .await;
         let _ = std::fs::remove_dir_all(&bare);
         let _ = std::fs::remove_dir_all(&dest);
         assert!(stats.is_ok(), "clone failed: {:?}", stats);

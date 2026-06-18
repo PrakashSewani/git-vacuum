@@ -27,7 +27,10 @@ pub enum AuthError {
     #[error("expired token")]
     ExpiredToken,
     #[error("insufficient scopes: required {required:?}, actual {actual:?}")]
-    InsufficientScopes { required: Vec<String>, actual: Vec<String> },
+    InsufficientScopes {
+        required: Vec<String>,
+        actual: Vec<String>,
+    },
     #[error("token revoked")]
     TokenRevoked,
     #[error("account suspended")]

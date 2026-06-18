@@ -52,7 +52,10 @@ impl OctocrabGithubApi {
         let crab = Octocrab::builder()
             .base_uri(self.base_url.as_str())
             .map_err(|e| AuthError::Internal(format!("invalid base uri: {e}")))?
-            .add_header(http::HeaderName::from_static("user-agent"), self.user_agent.clone())
+            .add_header(
+                http::HeaderName::from_static("user-agent"),
+                self.user_agent.clone(),
+            )
             .build()
             .map_err(|e| AuthError::Internal(e.to_string()))?;
         *self.client.lock() = Some(crab.clone());
@@ -62,13 +65,16 @@ impl OctocrabGithubApi {
     fn auth_client(&self) -> Result<Octocrab, AuthError> {
         let token = self.token.lock().clone();
         let token = token.ok_or(AuthError::InvalidToken)?;
-        Ok(Octocrab::builder()
+        Octocrab::builder()
             .base_uri(self.base_url.as_str())
             .map_err(|e| AuthError::Internal(format!("invalid base uri: {e}")))?
-            .add_header(http::HeaderName::from_static("user-agent"), self.user_agent.clone())
+            .add_header(
+                http::HeaderName::from_static("user-agent"),
+                self.user_agent.clone(),
+            )
             .personal_token(token)
             .build()
-            .map_err(|e| AuthError::Internal(e.to_string()))?)
+            .map_err(|e| AuthError::Internal(e.to_string()))
     }
 }
 
@@ -104,22 +110,37 @@ impl GithubApi for OctocrabGithubApi {
 
     async fn list_my_repos(&self) -> Result<Vec<RemoteRepo>, DiscoveryError> {
         let crab = self.auth_client().map_err(auth_to_discovery)?;
-        let url = format!("{}/user/repos?per_page=100&affiliation=owner,collaborator,organization_member", self.base_url);
-        let page: Vec<octocrab::models::Repository> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
+        let url = format!(
+            "{}/user/repos?per_page=100&affiliation=owner,collaborator,organization_member",
+            self.base_url
+        );
+        let page: Vec<octocrab::models::Repository> = crab
+            .get(url, None::<&()>)
+            .await
+            .map_err(map_discovery_error)?;
         Ok(page.into_iter().map(mapping::map_repo).collect())
     }
 
     async fn list_org_repos(&self, org: &str) -> Result<Vec<RemoteRepo>, DiscoveryError> {
         let crab = self.auth_client().map_err(auth_to_discovery)?;
-        let url = format!("{}/orgs/{}/repos?per_page=100&type=all&sort=updated", self.base_url, org);
-        let page: Vec<octocrab::models::Repository> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
+        let url = format!(
+            "{}/orgs/{}/repos?per_page=100&type=all&sort=updated",
+            self.base_url, org
+        );
+        let page: Vec<octocrab::models::Repository> = crab
+            .get(url, None::<&()>)
+            .await
+            .map_err(map_discovery_error)?;
         Ok(page.into_iter().map(mapping::map_repo).collect())
     }
 
     async fn list_starred_repos(&self) -> Result<Vec<RemoteRepo>, DiscoveryError> {
         let crab = self.auth_client().map_err(auth_to_discovery)?;
         let url = format!("{}/user/starred?per_page=100&sort=created", self.base_url);
-        let page: Vec<octocrab::models::Repository> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
+        let page: Vec<octocrab::models::Repository> = crab
+            .get(url, None::<&()>)
+            .await
+            .map_err(map_discovery_error)?;
         Ok(page.into_iter().map(mapping::map_repo).collect())
     }
 
@@ -130,7 +151,7 @@ impl GithubApi for OctocrabGithubApi {
             let mut org_repos = self.list_org_repos(&org.login).await?;
             all.append(&mut org_repos);
         }
-        all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        all.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
         all.dedup_by_key(|r| r.github_id);
         Ok(all)
     }
@@ -138,15 +159,21 @@ impl GithubApi for OctocrabGithubApi {
     async fn list_my_orgs(&self) -> Result<Vec<OrgInfo>, DiscoveryError> {
         let crab = self.auth_client().map_err(auth_to_discovery)?;
         let url = format!("{}/user/orgs?per_page=100", self.base_url);
-        let page: Vec<octocrab::models::orgs::Organization> = crab.get(url, None::<&()>).await.map_err(map_discovery_error)?;
-        Ok(page.into_iter().map(|o| OrgInfo {
-            github_org_id: o.id.0 as i64,
-            login: o.login,
-            display_name: o.name,
-            description: o.description,
-            avatar_url: Some(o.avatar_url.to_string()),
-            repos_count: o.public_repos.map(|c| c as i32).unwrap_or(0),
-        }).collect())
+        let page: Vec<octocrab::models::orgs::Organization> = crab
+            .get(url, None::<&()>)
+            .await
+            .map_err(map_discovery_error)?;
+        Ok(page
+            .into_iter()
+            .map(|o| OrgInfo {
+                github_org_id: o.id.0 as i64,
+                login: o.login,
+                display_name: o.name,
+                description: o.description,
+                avatar_url: Some(o.avatar_url.to_string()),
+                repos_count: o.public_repos.map(|c| c as i32).unwrap_or(0),
+            })
+            .collect())
     }
 
     async fn device_flow_init(
@@ -174,7 +201,9 @@ impl GithubApi for OctocrabGithubApi {
             .map_err(|e| AuthError::Internal(format!("json: {e}")))?;
 
         if let Some(err) = body["error"].as_str() {
-            let desc = body["error_description"].as_str().unwrap_or("(no description)");
+            let desc = body["error_description"]
+                .as_str()
+                .unwrap_or("(no description)");
             return Err(match err {
                 "incorrect_client_credentials" | "invalid_client" => {
                     AuthError::Internal(format!(
@@ -193,15 +222,17 @@ impl GithubApi for OctocrabGithubApi {
         if !status.is_success() {
             return Err(AuthError::Internal(format!(
                 "OAuth init HTTP {}: {}",
-                status,
-                body.to_string()
+                status, body
             )));
         }
 
         Ok(DeviceFlowInit {
             device_code: body["device_code"].as_str().unwrap_or_default().to_string(),
             user_code: body["user_code"].as_str().unwrap_or_default().to_string(),
-            verification_uri: body["verification_uri"].as_str().unwrap_or("https://github.com/login/device".into()).to_string(),
+            verification_uri: body["verification_uri"]
+                .as_str()
+                .unwrap_or("https://github.com/login/device")
+                .to_string(),
             expires_in: std::time::Duration::from_secs(body["expires_in"].as_u64().unwrap_or(900)),
             interval: std::time::Duration::from_secs(body["interval"].as_u64().unwrap_or(5)),
         })
@@ -214,7 +245,10 @@ impl GithubApi for OctocrabGithubApi {
     ) -> Result<DeviceFlowPoll, AuthError> {
         let client = reqwest::Client::new();
         let res = client
-            .post(format!("{}/login/oauth/access_token", self.oauth_base_url()))
+            .post(format!(
+                "{}/login/oauth/access_token",
+                self.oauth_base_url()
+            ))
             .header("Accept", "application/json")
             .header("User-Agent", &self.user_agent)
             .form(&[
@@ -236,7 +270,8 @@ impl GithubApi for OctocrabGithubApi {
         // 4xx with { "message": "...", "documentation_url": "..." }.
         // Handle both.
         let err_str = body["error"].as_str();
-        let desc_str = body["error_description"].as_str()
+        let desc_str = body["error_description"]
+            .as_str()
             .or_else(|| body["message"].as_str())
             .unwrap_or("");
         if let Some(err) = err_str {

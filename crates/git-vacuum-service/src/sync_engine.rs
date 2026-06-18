@@ -1,14 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use git_vacuum_core::{
-    AppEvent, CloneStatus, JobId, JobSpec, LocalStatus, PlannedOperation, Priority,
-    RepoEntry, SyncOptions, SyncSummary,
-};
+use git_vacuum_core::{AppEvent, JobId, SyncSummary};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
@@ -75,10 +71,10 @@ pub async fn run(
             progress_tx: progress_tx.clone(),
             app_tx: app_tx.clone(),
             cancel_rx: cancel_rx.clone(),
-            pause_flag: pause_flag.clone(),
+            _pause_flag: pause_flag.clone(),
             tracker: tracker.clone(),
             result_tx: result_tx.clone(),
-            run_id,
+            _run_id: run_id,
         };
         let handle = tokio::spawn(async move {
             let _permit = permit; // released on drop
@@ -107,7 +103,7 @@ pub async fn run(
     let _ = collect_handle.await;
 
     let summary = SyncSummary {
-        total_jobs: total_jobs,
+        total_jobs,
         cloned: tracker.cloned.load(Ordering::Relaxed),
         updated: tracker.updated.load(Ordering::Relaxed),
         up_to_date: tracker.up_to_date.load(Ordering::Relaxed),
@@ -139,7 +135,9 @@ pub async fn run(
         );
     }
 
-    let _ = app_tx.send(AppEvent::SyncAllCompleted { summary: summary.clone() });
+    let _ = app_tx.send(AppEvent::SyncAllCompleted {
+        summary: summary.clone(),
+    });
     summary
 }
 
@@ -236,7 +234,9 @@ impl Collector {
                     duration: Duration::from_secs(0),
                 });
             }
-            Updated { bytes, new_commits, .. } => {
+            Updated {
+                bytes, new_commits, ..
+            } => {
                 self.tracker.complete_active(job_id, true, *bytes);
                 self.tracker.updated.fetch_add(1, Ordering::Relaxed);
                 let _ = self.app_tx.send(AppEvent::SyncFetchCompleted {
@@ -283,16 +283,19 @@ impl Collector {
                 Failed { error, .. } => Some(error.clone()),
                 _ => None,
             };
-            let _ = self.services.db.insert_sync_entries(&[git_vacuum_core::NewSyncEntry {
-                run_id: rid,
-                repo_id: repo,
-                operation: operation.to_string(),
-                status: status.to_string(),
-                bytes_transferred: bytes as i64,
-                new_commits: 0,
-                duration_ms: None,
-                error_message: error,
-            }]);
+            let _ = self
+                .services
+                .db
+                .insert_sync_entries(&[git_vacuum_core::NewSyncEntry {
+                    run_id: rid,
+                    repo_id: repo,
+                    operation: operation.to_string(),
+                    status: status.to_string(),
+                    bytes_transferred: bytes as i64,
+                    new_commits: 0,
+                    duration_ms: None,
+                    error_message: error,
+                }]);
         }
     }
 }

@@ -4,11 +4,15 @@ pub mod traits;
 pub mod types;
 pub mod util;
 
-pub use error::{AuthError, ConfigError, DbError, DiscoveryError, Error, GitError, KeyringError, SyncError};
-pub use event::{Action, AppEvent, AuthMethodChoice, Effect, EventBus, EventBusHandle, InputEvent, TabTarget};
+pub use error::{
+    AuthError, ConfigError, DbError, DiscoveryError, Error, GitError, KeyringError, SyncError,
+};
+pub use event::{
+    Action, AppEvent, AuthMethodChoice, Effect, EventBus, EventBusHandle, InputEvent, TabTarget,
+};
 pub use traits::{
     list_for_source, AttentionItem, CloneStats, DashboardStats, Database, DatabaseFactory,
-    DeviceFlowInit, DeviceFlowPoll, FetchResult, GithubApi, GitOps, KeyringStore, LocalRepoStatus,
+    DeviceFlowInit, DeviceFlowPoll, FetchResult, GitOps, GithubApi, KeyringStore, LocalRepoStatus,
     LocalStatus, NewSyncEntry, NewSyncRun, PagedStream, RateLimitStatus, RepoRow, SizeBucket,
     SyncRunUpdate,
 };

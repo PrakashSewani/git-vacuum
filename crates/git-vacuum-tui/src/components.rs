@@ -1,17 +1,17 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::theme::{
+    COLOR_ACCENT, COLOR_BG_HIGHLIGHT, COLOR_BG_PANEL, COLOR_MUTED, COLOR_PRIMARY,
+    COLOR_PRIMARY_BRIGHT, COLOR_SUCCESS_BRIGHT,
+};
 use git_vacuum_app::state::TabKind;
 use git_vacuum_core::RepoEntry;
-use crate::theme::{
-    COLOR_ACCENT, COLOR_BG_HIGHLIGHT, COLOR_BG_PANEL, COLOR_MUTED,
-    COLOR_PRIMARY, COLOR_PRIMARY_BRIGHT, COLOR_SUCCESS_BRIGHT,
-};
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn spinner_frame(tick: u64) -> &'static str {
-    SPINNER_FRAMES[(tick as usize / 1) % SPINNER_FRAMES.len()]
+    SPINNER_FRAMES[(tick as usize) % SPINNER_FRAMES.len()]
 }
 
 pub fn dots_frame(tick: u64) -> &'static str {
@@ -72,12 +72,16 @@ pub fn title_bar<'a>(
 ) -> Vec<Line<'a>> {
     let brand = Span::styled(
         " ⬢ git-vacuum ",
-        Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(COLOR_PRIMARY_BRIGHT)
+            .add_modifier(Modifier::BOLD),
     );
     let user_span = match user {
         Some(u) => Span::styled(
             format!("  {} ", u.login),
-            Style::default().fg(COLOR_SUCCESS_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_SUCCESS_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         ),
         None => Span::styled("  (not authenticated) ", Style::default().fg(COLOR_MUTED)),
     };
@@ -98,7 +102,11 @@ pub fn title_bar<'a>(
         None => Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled(
-                format!("{} loading dashboard stats{}", spinner_frame(tick), dots_frame(tick)),
+                format!(
+                    "{} loading dashboard stats{}",
+                    spinner_frame(tick),
+                    dots_frame(tick)
+                ),
                 Style::default().fg(COLOR_MUTED),
             ),
         ]),
@@ -106,7 +114,7 @@ pub fn title_bar<'a>(
 
     let border = breathing_char(tick);
     let line3 = Line::from(Span::styled(
-        std::iter::repeat(border).take(80).collect::<String>(),
+        std::iter::repeat_n(border, 80).collect::<String>(),
         Style::default().fg(COLOR_PRIMARY),
     ));
 
@@ -149,14 +157,19 @@ pub fn tab_bar(active: TabKind, repos_loading: bool, tick: u64) -> Line<'static>
 
 /// Returns the activity banner showing what the TUI is currently loading.
 /// Returns `None` if nothing is loading.
-pub fn activity_banner(loading: &git_vacuum_app::state::LoadingState, tick: u64) -> Option<Line<'static>> {
+pub fn activity_banner(
+    loading: &git_vacuum_app::state::LoadingState,
+    tick: u64,
+) -> Option<Line<'static>> {
     if !loading.anything_pending() {
         return None;
     }
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.push(Span::styled(
         format!(" {} ", spinner_frame(tick)),
-        Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(COLOR_ACCENT)
+            .add_modifier(Modifier::BOLD),
     ));
     if loading.repos {
         spans.push(Span::styled(
@@ -164,13 +177,16 @@ pub fn activity_banner(loading: &git_vacuum_app::state::LoadingState, tick: u64)
             Style::default().fg(COLOR_PRIMARY_BRIGHT),
         ));
         spans.push(Span::styled(
-            format!("{}", dots_frame(tick)),
+            dots_frame(tick).to_string(),
             Style::default().fg(COLOR_PRIMARY_BRIGHT),
         ));
     }
     if loading.repos && loading.stats {
         spans.push(Span::styled("   ".to_string(), Style::default()));
-        spans.push(Span::styled("│".to_string(), Style::default().fg(COLOR_MUTED)));
+        spans.push(Span::styled(
+            "│".to_string(),
+            Style::default().fg(COLOR_MUTED),
+        ));
         spans.push(Span::styled("   ".to_string(), Style::default()));
     }
     if loading.stats {
@@ -179,7 +195,7 @@ pub fn activity_banner(loading: &git_vacuum_app::state::LoadingState, tick: u64)
             Style::default().fg(COLOR_PRIMARY_BRIGHT),
         ));
         spans.push(Span::styled(
-            format!("{}", dots_frame(tick + 5)),
+            dots_frame(tick + 5).to_string(),
             Style::default().fg(COLOR_PRIMARY_BRIGHT),
         ));
     }
@@ -192,7 +208,12 @@ pub fn key_bar<'a>(bindings: &[(&str, &str)]) -> Line<'a> {
         if i > 0 {
             spans.push(Span::raw("  "));
         }
-        spans.push(Span::styled(format!(" {}:", key), Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            format!(" {}:", key),
+            Style::default()
+                .fg(COLOR_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ));
         spans.push(Span::raw(format!(" {}", desc)));
     }
     Line::from(spans)
@@ -221,7 +242,10 @@ pub fn format_repo_row(repos: &[RepoEntry], idx: usize, max_width: usize) -> Lin
             git_vacuum_core::CloneStatus::Stale => "⚠",
             git_vacuum_core::CloneStatus::Error => "✗",
         };
-        Line::from(format!("{} {} {}  {}  {}", check, name_truncated, visibility, status, stars))
+        Line::from(format!(
+            "{} {} {}  {}  {}",
+            check, name_truncated, visibility, status, stars
+        ))
     } else {
         Line::from("")
     }
@@ -235,7 +259,9 @@ pub fn highlight_style() -> Style {
 pub fn key_hint(key: &str, desc: &str) -> Span<'static> {
     Span::styled(
         format!(" {key}:{desc}"),
-        Style::default().fg(COLOR_PRIMARY).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(COLOR_PRIMARY)
+            .add_modifier(Modifier::BOLD),
     )
 }
 
@@ -267,7 +293,8 @@ pub fn big_code_lines(code: &str, inner_width: usize) -> Vec<Line<'static>> {
         ))];
     }
     let pad = "▓".repeat(((inner_width.saturating_sub(code.chars().count())) / 2).max(1));
-    let right_pad = "▓".repeat(inner_width.saturating_sub(pad.chars().count() + code.chars().count()).max(0));
+    let right_pad =
+        "▓".repeat(inner_width.saturating_sub(pad.chars().count() + code.chars().count()));
     let styled_code = Span::styled(
         code.to_string(),
         Style::default()

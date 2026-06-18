@@ -33,7 +33,16 @@ pub fn upsert(conn: &Connection, info: &UserInfo) -> Result<(), SqliteErr> {
 }
 
 pub fn get_active(conn: &Connection) -> Result<Option<UserInfo>, SqliteErr> {
-    let row: Option<(i64, String, Option<String>, Option<String>, Option<String>, String, Option<String>)> = conn
+    #[allow(clippy::type_complexity)]
+    let row: Option<(
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+    )> = conn
         .query_row(
             r#"SELECT github_user_id, login, name, email, avatar_url, scopes_json, token_expires_at
                FROM accounts ORDER BY last_validated_at DESC LIMIT 1"#,

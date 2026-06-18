@@ -5,23 +5,22 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use arboard::Clipboard;
 use clap::Parser;
-use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use git_vacuum_app::App;
-use git_vacuum_app::state::{AppState, TabKind};
-use git_vacuum_core::{
-    Action, AppEvent, AuthMethod, EventBus, Effect, RepoSource, UserInfo,
+use crossterm::event::{
+    Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
-use git_vacuum_db::SqliteDatabase;
+use futures::StreamExt;
+use git_vacuum_app::state::{AppState, TabKind};
+use git_vacuum_app::App;
 use git_vacuum_core::Database as _;
+use git_vacuum_core::{Action, AppEvent, AuthMethod, Effect, EventBus, RepoSource, UserInfo};
+use git_vacuum_db::SqliteDatabase;
 use git_vacuum_git::Git2GitOps;
 use git_vacuum_github::OctocrabGithubApi;
 use git_vacuum_keyring::PlatformKeyring;
 use git_vacuum_service::{run_sync as svc_run_sync, Services, SyncRequest};
 use git_vacuum_tui::terminal;
-use open;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
-use futures::StreamExt;
 
 #[derive(Parser, Debug)]
 #[command(name = "git-vacuum", about = "Local GitHub backup & mirror TUI")]
@@ -83,7 +82,15 @@ async fn main() -> Result<()> {
     }
 
     // TUI mode (pass initial token if provided via --token)
-    run_tui(services, db, clone_path, args.concurrency, args.token, args.oauth_client_id).await
+    run_tui(
+        services,
+        db,
+        clone_path,
+        args.concurrency,
+        args.token,
+        args.oauth_client_id,
+    )
+    .await
 }
 
 fn default_db_path() -> PathBuf {
@@ -117,12 +124,15 @@ async fn run_headless_sync(
         println!("No repos selected. Exiting.");
         return Ok(());
     }
-    println!("Syncing {} repos to {}", selected.len(), clone_path.display());
+    println!(
+        "Syncing {} repos to {}",
+        selected.len(),
+        clone_path.display()
+    );
 
     let (progress_tx, _app_tx) = mpsc::unbounded_channel();
     let (app_tx2, _rx) = mpsc::unbounded_channel();
-    let cancel_rx = services.github.set_token(&token); // dummy: we don't need cancel in headless
-    drop(cancel_rx);
+    services.github.set_token(&token); // dummy: we don't need cancel in headless
     let _ = svc_run_sync(
         services,
         SyncRequest {
@@ -134,7 +144,8 @@ async fn run_headless_sync(
         progress_tx,
         app_tx2,
         tokio::sync::watch::channel(false).1,
-    ).await;
+    )
+    .await;
     Ok(())
 }
 
@@ -367,9 +378,15 @@ fn key_to_action(key: KeyEvent, app: &mut App) -> Option<Action> {
         }
     }
     if let AppState::Running(state) = &app.state {
-        if state.active_tab == TabKind::Settings && key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::SHIFT) {
+        if state.active_tab == TabKind::Settings
+            && key.code == KeyCode::Tab
+            && !key.modifiers.contains(KeyModifiers::SHIFT)
+        {
             let cats = git_vacuum_core::SettingsCategory::all();
-            let current = cats.iter().position(|c| *c == state.tab_states.settings.selected_category).unwrap_or(0);
+            let current = cats
+                .iter()
+                .position(|c| *c == state.tab_states.settings.selected_category)
+                .unwrap_or(0);
             let next = (current + 1) % cats.len();
             return Some(Action::SettingsSwitchCategory(next));
         }
@@ -407,7 +424,9 @@ fn key_to_action(key: KeyEvent, app: &mut App) -> Option<Action> {
 }
 
 fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
-    let AppState::Auth(auth) = &app.state else { return None };
+    let AppState::Auth(auth) = &app.state else {
+        return None;
+    };
 
     use git_vacuum_app::state::{AuthMethodChoice, AuthPhase};
 
@@ -415,27 +434,21 @@ fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
         AuthPhase::MethodPicker => {
             // Cursor navigation + selection.
             match key.code {
-                KeyCode::Up => return Some(Action::AuthMethodCursorMoved(-1)),
-                KeyCode::Down => return Some(Action::AuthMethodCursorMoved(1)),
-                KeyCode::Char('1') => {
-                    return Some(Action::AuthMethodSelected(AuthMethodChoice::Pat))
-                }
-                KeyCode::Char('2') => {
-                    return Some(Action::AuthMethodSelected(AuthMethodChoice::OAuth))
-                }
-                KeyCode::Char('3') => {
-                    return Some(Action::AuthMethodSelected(AuthMethodChoice::GhCli))
-                }
+                KeyCode::Up => Some(Action::AuthMethodCursorMoved(-1)),
+                KeyCode::Down => Some(Action::AuthMethodCursorMoved(1)),
+                KeyCode::Char('1') => Some(Action::AuthMethodSelected(AuthMethodChoice::Pat)),
+                KeyCode::Char('2') => Some(Action::AuthMethodSelected(AuthMethodChoice::OAuth)),
+                KeyCode::Char('3') => Some(Action::AuthMethodSelected(AuthMethodChoice::GhCli)),
                 KeyCode::Enter => {
                     let method = match auth.method_cursor {
                         0 => AuthMethodChoice::Pat,
                         1 => AuthMethodChoice::OAuth,
                         _ => AuthMethodChoice::GhCli,
                     };
-                    return Some(Action::AuthMethodSelected(method));
+                    Some(Action::AuthMethodSelected(method))
                 }
-                KeyCode::Esc | KeyCode::Char('q') => return Some(Action::Quit),
-                _ => return None,
+                KeyCode::Esc | KeyCode::Char('q') => Some(Action::Quit),
+                _ => None,
             }
         }
         AuthPhase::PatInput => {
@@ -456,9 +469,7 @@ fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
                 return None;
             }
             match key.code {
-                KeyCode::Enter => {
-                    Some(Action::AuthSubmitToken(auth.token_input.clone()))
-                }
+                KeyCode::Enter => Some(Action::AuthSubmitToken(auth.token_input.clone())),
                 KeyCode::Backspace => {
                     let mut s = auth.token_input.clone();
                     s.pop();
@@ -487,7 +498,9 @@ fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
                 if key.code == KeyCode::Esc {
                     return Some(Action::AuthDismissUrlPrompt);
                 }
-                if key.code == KeyCode::Enter || matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+                if key.code == KeyCode::Enter
+                    || matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O'))
+                {
                     return Some(Action::AuthOpenOAuthUrl);
                 }
                 return None;
@@ -495,7 +508,9 @@ fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
             if key.code == KeyCode::Esc {
                 return Some(Action::AuthBackToMethodPicker);
             }
-            if key.code == KeyCode::Enter || matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O')) {
+            if key.code == KeyCode::Enter
+                || matches!(key.code, KeyCode::Char('o') | KeyCode::Char('O'))
+            {
                 return Some(Action::AuthOpenOAuthUrl);
             }
             if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
@@ -505,23 +520,19 @@ fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
         }
         AuthPhase::AuthFailed => {
             match key.code {
-                KeyCode::Esc => return Some(Action::AuthBackToMethodPicker),
-                KeyCode::Tab | KeyCode::Right => {
-                    return Some(Action::AuthFailedFocusMoved(1))
-                }
-                KeyCode::BackTab | KeyCode::Left => {
-                    return Some(Action::AuthFailedFocusMoved(-1))
-                }
+                KeyCode::Esc => Some(Action::AuthBackToMethodPicker),
+                KeyCode::Tab | KeyCode::Right => Some(Action::AuthFailedFocusMoved(1)),
+                KeyCode::BackTab | KeyCode::Left => Some(Action::AuthFailedFocusMoved(-1)),
                 KeyCode::Enter => {
                     if auth.failed_focus == 0 {
                         // Try Again — re-activate the last method.
-                        return Some(Action::AuthMethodSelected(auth.last_method));
+                        Some(Action::AuthMethodSelected(auth.last_method))
                     } else {
                         // Pick a different method.
-                        return Some(Action::AuthBackToMethodPicker);
+                        Some(Action::AuthBackToMethodPicker)
                     }
                 }
-                _ => return None,
+                _ => None,
             }
         }
     }
@@ -530,7 +541,9 @@ fn key_to_action_auth(key: KeyEvent, app: &App) -> Option<Action> {
 // Convenience alias for borrowing the AuthScreenState without taking ownership.
 
 fn key_to_action_running(key: KeyEvent, app: &mut App) -> Option<Action> {
-    let AppState::Running(state) = &mut app.state else { return None };
+    let AppState::Running(state) = &mut app.state else {
+        return None;
+    };
 
     if state.command_palette.is_some() {
         return key_to_action_palette(key);
@@ -584,7 +597,8 @@ fn key_to_action_running(key: KeyEvent, app: &mut App) -> Option<Action> {
                 None
             }
             KeyCode::Up => {
-                state.tab_states.explorer.cursor = state.tab_states.explorer.cursor.saturating_sub(1);
+                state.tab_states.explorer.cursor =
+                    state.tab_states.explorer.cursor.saturating_sub(1);
                 None
             }
             _ => None,
@@ -629,7 +643,9 @@ fn key_to_action_running(key: KeyEvent, app: &mut App) -> Option<Action> {
                         Some(Action::SettingsNavigate(new))
                     }
                     KeyCode::Enter => Some(Action::SettingsEdit(st.selected_field)),
-                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::SettingsSave),
+                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        Some(Action::SettingsSave)
+                    }
                     KeyCode::Esc => Some(Action::SettingsDiscard),
                     _ => None,
                 }
@@ -673,12 +689,16 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                 }
             });
         }
-        Effect::StartOAuthDeviceFlow { client_id: _, scopes: _ } => {
+        Effect::StartOAuthDeviceFlow {
+            client_id: _,
+            scopes: _,
+        } => {
             let services2 = services.clone();
             let app_tx2 = app_tx.clone();
             let client_id_owned = app.oauth_client_id.clone().unwrap_or_default();
             tokio::spawn(async move {
-                match git_vacuum_service::start_oauth_device_flow(services2, &client_id_owned).await {
+                match git_vacuum_service::start_oauth_device_flow(services2, &client_id_owned).await
+                {
                     Ok(init) => {
                         let _ = app_tx2.send(AppEvent::OAuthCodeReceived {
                             user_code: init.user_code,
@@ -695,7 +715,8 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                         tokio::spawn(async move {
                             let start = std::time::Instant::now();
                             loop {
-                                tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+                                tokio::time::sleep(std::time::Duration::from_secs(interval_secs))
+                                    .await;
                                 if start.elapsed() > expires_in {
                                     let _ = app_tx3.send(AppEvent::OAuthTimeout);
                                     break;
@@ -707,15 +728,27 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                                 )
                                 .await
                                 {
-                                    Ok(git_vacuum_core::DeviceFlowPoll::Success { access_token, scopes }) => {
-                                        let _ = app_tx3.send(AppEvent::OAuthTokenReceived { token: access_token, scopes });
+                                    Ok(git_vacuum_core::DeviceFlowPoll::Success {
+                                        access_token,
+                                        scopes,
+                                    }) => {
+                                        let _ = app_tx3.send(AppEvent::OAuthTokenReceived {
+                                            token: access_token,
+                                            scopes,
+                                        });
                                         break;
                                     }
-                                    Ok(git_vacuum_core::DeviceFlowPoll::SlowDown { new_interval }) => {
+                                    Ok(git_vacuum_core::DeviceFlowPoll::SlowDown {
+                                        new_interval,
+                                    }) => {
                                         // Use new interval next iteration
-                                        let extra = new_interval.as_secs().saturating_sub(interval_secs);
+                                        let extra =
+                                            new_interval.as_secs().saturating_sub(interval_secs);
                                         if extra > 0 {
-                                            tokio::time::sleep(std::time::Duration::from_secs(extra)).await;
+                                            tokio::time::sleep(std::time::Duration::from_secs(
+                                                extra,
+                                            ))
+                                            .await;
                                         }
                                     }
                                     Ok(git_vacuum_core::DeviceFlowPoll::Expired) => {
@@ -764,7 +797,11 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                 }
             });
         }
-        Effect::PollOAuthToken { client_id: _, device_code: _, interval } => {
+        Effect::PollOAuthToken {
+            client_id: _,
+            device_code: _,
+            interval,
+        } => {
             // Deprecated: handled inline in StartOAuthDeviceFlow
             let _ = interval;
         }
@@ -786,7 +823,8 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
             tokio::spawn(async move {
                 let _ = tokio::task::spawn_blocking(move || {
                     Clipboard::new().and_then(|mut cb| cb.set_text(text_owned))
-                }).await;
+                })
+                .await;
             });
         }
         Effect::CompleteOAuthWithToken { token } => {
@@ -808,7 +846,8 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
         }
         Effect::LoadStoredCredentials => {
             tokio::spawn(async move {
-                if let Ok(Some(info)) = git_vacuum_service::load_stored_credentials(services).await {
+                if let Ok(Some(info)) = git_vacuum_service::load_stored_credentials(services).await
+                {
                     let _ = app_tx.send(AppEvent::AuthSucceeded { info });
                 }
             });
@@ -829,10 +868,15 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                         // Push entries to the TUI immediately so it has data
                         let count = entries.len();
                         let _ = app_tx2.send(AppEvent::ReposLoaded { entries });
-                        let _ = app_tx2.send(AppEvent::ReposDiscovered { source: source_for_event, count });
+                        let _ = app_tx2.send(AppEvent::ReposDiscovered {
+                            source: source_for_event,
+                            count,
+                        });
                     }
                     Err(e) => {
-                        let _ = app_tx2.send(AppEvent::DiscoveryFailed { error: e.to_string() });
+                        let _ = app_tx2.send(AppEvent::DiscoveryFailed {
+                            error: e.to_string(),
+                        });
                     }
                 }
             });
@@ -889,10 +933,17 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                 }
             });
         }
-        Effect::PersistRepoSelection { github_ids, selected } => {
+        Effect::PersistRepoSelection {
+            github_ids,
+            selected,
+        } => {
             let _ = services.db.set_repos_selected(&github_ids, selected);
         }
-        Effect::StartSync { repos, base_path, concurrency } => {
+        Effect::StartSync {
+            repos,
+            base_path,
+            concurrency,
+        } => {
             let services2 = services.clone();
             let app_tx2 = app_tx.clone();
             let progress_tx2 = progress_tx.clone();
@@ -909,7 +960,8 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                     progress_tx2,
                     app_tx2,
                     cancel_rx2,
-                ).await;
+                )
+                .await;
             });
         }
         Effect::PauseSync => {
@@ -924,7 +976,11 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
             let _ = bus.cancel_tx.send(true);
             let _ = app_tx.send(AppEvent::SyncCancelled {
                 summary: git_vacuum_core::PartialSyncSummary {
-                    completed: 0, failed: 0, cancelled: 0, pending_dropped: 0, bytes_transferred: 0,
+                    completed: 0,
+                    failed: 0,
+                    cancelled: 0,
+                    pending_dropped: 0,
+                    bytes_transferred: 0,
                 },
             });
         }
@@ -933,13 +989,13 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
             let app_tx2 = app_tx.clone();
             tokio::spawn(async move {
                 let stats = git_vacuum_service::compute_stats(services2.clone()).await;
-                let attention = services2
-                    .db
-                    .get_attention_list(10)
-                    .unwrap_or_default();
+                let attention = services2.db.get_attention_list(10).unwrap_or_default();
                 match stats {
                     Ok(s) => {
-                        let _ = app_tx2.send(AppEvent::DashboardStatsUpdated { stats: s, attention });
+                        let _ = app_tx2.send(AppEvent::DashboardStatsUpdated {
+                            stats: s,
+                            attention,
+                        });
                     }
                     Err(e) => {
                         // Even on failure, send a zeroed stats to clear loading state
@@ -966,7 +1022,11 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
                 }
             });
         }
-        Effect::RecordSyncRun { .. } | Effect::ExportRun { .. } | Effect::TestConnection | Effect::PersistRepos { .. } | Effect::MarkReposDeleted { .. } => {
+        Effect::RecordSyncRun { .. }
+        | Effect::ExportRun { .. }
+        | Effect::TestConnection
+        | Effect::PersistRepos { .. }
+        | Effect::MarkReposDeleted { .. } => {
             log::debug!("Effect not yet implemented: {effect:?}");
         }
         Effect::CloneSingle { .. } | Effect::SyncSingle { .. } => {
@@ -974,7 +1034,9 @@ fn spawn_effect(effect: Effect, app: &App, bus: &git_vacuum_core::EventBus) {
         }
         Effect::None => {}
     }
-    let _ = app_tx; let _ = progress_tx; let _ = cancel_rx;
+    let _ = app_tx;
+    let _ = progress_tx;
+    let _ = cancel_rx;
     let _ = Instant::now();
     let _: AuthMethod = AuthMethod::Pat;
     let _: Option<UserInfo> = None;

@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use git_vacuum_core::{
-    list_for_source, DiscoveryError, RemoteRepo, RepoEntry, RepoSource,
-};
+use git_vacuum_core::{list_for_source, DiscoveryError, RemoteRepo, RepoEntry, RepoSource};
 
 use crate::merge::{merge_remote_into, should_prune_from_scope};
 use crate::Services;
@@ -14,43 +12,42 @@ pub async fn discover(
     source: RepoSource,
 ) -> Result<Vec<RepoEntry>, DiscoveryError> {
     // 1. Validate token first (fail fast)
-    services.github.get_authenticated_user().await
+    services
+        .github
+        .get_authenticated_user()
+        .await
         .map_err(|e| DiscoveryError::Auth(format!("{e}")))?;
 
     // 2. Fetch remote repos
     let remote = list_for_source(services.github.as_ref(), &source).await?;
 
     // 3. Load cached entries
-    let cached = services.db.get_all_repos().map_err(|e| DiscoveryError::Internal(e.to_string()))?;
-    let cached_by_id: std::collections::HashMap<i64, _> = cached
-        .iter()
-        .map(|r| (r.github_id, r.clone()))
-        .collect();
+    let cached = services
+        .db
+        .get_all_repos()
+        .map_err(|e| DiscoveryError::Internal(e.to_string()))?;
+    let cached_by_id: std::collections::HashMap<i64, _> =
+        cached.iter().map(|r| (r.github_id, r.clone())).collect();
 
     // 4. Build merged entries
     let mut merged: Vec<RepoEntry> = Vec::with_capacity(remote.len());
     for r in remote {
         let existing_repo_row = cached_by_id.get(&r.github_id);
         // Try to find a matching RepoEntry for state preservation
-        let existing_entry: Option<RepoEntry> = existing_repo_row.and_then(|row| {
-            // We need to convert RepoRow back to RepoEntry. Since we have the RepoRow,
-            // we can use it as a fallback source. The simpler path: build a fresh entry
-            // and let merge_remote_into use the row's preserved state.
-            Some(row_to_entry(row))
-        });
+        let existing_entry: Option<RepoEntry> = existing_repo_row.map(row_to_entry);
         let new = existing_repo_row.map(|r| r.selected).unwrap_or(true);
         merged.push(merge_remote_into(r, existing_entry.as_ref(), new));
     }
 
     // 5. Mark cached-but-not-in-remote as deleted_on_remote (if in scope)
     let remote_ids: std::collections::HashSet<i64> = merged.iter().map(|e| e.github_id).collect();
-    let mut marked = 0usize;
     for cached_entry in &cached {
-        if !remote_ids.contains(&cached_entry.github_id) {
-            if should_prune_from_scope(&row_to_entry(cached_entry), &source) {
-                let _ = services.db.mark_repo_deleted_on_remote(cached_entry.github_id);
-                marked += 1;
-            }
+        if !remote_ids.contains(&cached_entry.github_id)
+            && should_prune_from_scope(&row_to_entry(cached_entry), &source)
+        {
+            let _ = services
+                .db
+                .mark_repo_deleted_on_remote(cached_entry.github_id);
         }
     }
 

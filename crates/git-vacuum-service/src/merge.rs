@@ -1,18 +1,14 @@
 use chrono::Utc;
-use git_vacuum_core::{CloneStatus, RepoEntry, RepoSource, RemoteRepo};
+use git_vacuum_core::{CloneStatus, RemoteRepo, RepoEntry, RepoSource};
 
 use crate::discovery::is_in_scope;
 
 /// Convert a fresh `RemoteRepo` from the GitHub API into a `RepoEntry` for the UI.
 /// Existing `RepoEntry` data is preserved when the remote matches an existing row
 /// (clone status, local path, selection, behind count, etc.).
-pub fn merge_remote_into(
-    remote: RemoteRepo,
-    existing: Option<&RepoEntry>,
-    new: bool,
-) -> RepoEntry {
+pub fn merge_remote_into(remote: RemoteRepo, existing: Option<&RepoEntry>, new: bool) -> RepoEntry {
     let now = Utc::now();
-    let topics_json = serde_json::to_string(&remote.topics).unwrap_or_else(|_| "[]".to_string());
+    let _topics_json = serde_json::to_string(&remote.topics).unwrap_or_else(|_| "[]".to_string());
 
     if let Some(existing) = existing {
         RepoEntry {
@@ -32,7 +28,9 @@ pub fn merge_remote_into(
             updated_at: remote.updated_at,
             topics: remote.topics,
             clone_url_https: remote.clone_url_https,
-            clone_url_ssh: remote.clone_url_ssh.or_else(|| existing.clone_url_ssh.clone()),
+            clone_url_ssh: remote
+                .clone_url_ssh
+                .or_else(|| existing.clone_url_ssh.clone()),
 
             // Preserved local state
             clone_status: existing.clone_status,
@@ -83,10 +81,7 @@ pub fn merge_remote_into(
 /// - Org(login) → only that org's repos
 /// - Starred → never prune (we don't track ownership for starred)
 /// - All → everything
-pub fn should_prune_from_scope(
-    entry: &RepoEntry,
-    source: &RepoSource,
-) -> bool {
+pub fn should_prune_from_scope(entry: &RepoEntry, source: &RepoSource) -> bool {
     if !is_in_scope(entry, source) {
         return false;
     }

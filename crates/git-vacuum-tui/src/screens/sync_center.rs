@@ -4,13 +4,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use git_vacuum_app::tabs::{LogStatus, SyncCenterTabState, SyncPhase};
 use crate::components::{progress_bar, spinner_frame};
 use crate::theme::{
     COLOR_ACCENT, COLOR_ERROR, COLOR_ERROR_BRIGHT, COLOR_MUTED, COLOR_PRIMARY,
-    COLOR_PRIMARY_BRIGHT, COLOR_SUCCESS, COLOR_SUCCESS_BRIGHT, COLOR_WARNING,
-    COLOR_WARNING_BRIGHT,
+    COLOR_PRIMARY_BRIGHT, COLOR_SUCCESS, COLOR_SUCCESS_BRIGHT, COLOR_WARNING, COLOR_WARNING_BRIGHT,
 };
+use git_vacuum_app::tabs::{LogStatus, SyncCenterTabState, SyncPhase};
 
 pub fn render_sync_center(f: &mut Frame, area: Rect, state: &SyncCenterTabState, tick: u64) {
     match &state.phase {
@@ -27,7 +26,9 @@ fn render_idle(f: &mut Frame, area: Rect, tick: u64) {
         Line::from(""),
         Line::from(Span::styled(
             " Sync Center: live view of clone / fetch operations.",
-            Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
@@ -40,18 +41,28 @@ fn render_idle(f: &mut Frame, area: Rect, tick: u64) {
             Style::default().fg(COLOR_MUTED),
         )),
     ])
-    .block(Block::default().borders(Borders::ALL).title(" Sync Center "));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Sync Center "),
+    );
     f.render_widget(p, area);
 }
 
 fn render_pre(f: &mut Frame, area: Rect, state: &SyncCenterTabState, tick: u64) {
     let width = (area.width as usize).saturating_sub(8);
-    let bar = progress_bar(width.max(16), 0.25 + (tick as f32 / 20.0).sin() * 0.15, tick);
+    let bar = progress_bar(
+        width.max(16),
+        0.25 + (tick as f32 / 20.0).sin() * 0.15,
+        tick,
+    );
     let body = vec![
         Line::from(""),
         Line::from(Span::styled(
             format!(" {} Sync request in progress", spinner_frame(tick)),
-            Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(COLOR_ACCENT)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
@@ -70,8 +81,7 @@ fn render_pre(f: &mut Frame, area: Rect, state: &SyncCenterTabState, tick: u64) 
             Style::default().fg(COLOR_MUTED),
         )),
     ];
-    let p = Paragraph::new(body)
-        .block(Block::default().borders(Borders::ALL).title(" Pre-Sync "));
+    let p = Paragraph::new(body).block(Block::default().borders(Borders::ALL).title(" Pre-Sync "));
     f.render_widget(p, area);
 }
 
@@ -79,14 +89,16 @@ fn render_active(f: &mut Frame, area: Rect, state: &SyncCenterTabState, tick: u6
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),  // overall progress
-            Constraint::Min(0),     // log
+            Constraint::Length(5), // overall progress
+            Constraint::Min(0),    // log
         ])
         .margin(1)
         .split(area);
 
     // Overall progress
-    let progress_block = Block::default().borders(Borders::ALL).title(" Overall Progress ");
+    let progress_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Overall Progress ");
     if let Some(p) = state.overall.as_ref() {
         let pct = p.percent.clamp(0.0, 100.0) as u16;
         let label = format!("{} / {} repos", p.completed, p.total_jobs);
@@ -147,29 +159,75 @@ fn render_active(f: &mut Frame, area: Rect, state: &SyncCenterTabState, tick: u6
 fn render_completed(f: &mut Frame, area: Rect, s: &git_vacuum_core::SyncSummary) {
     let body = vec![
         Line::from(""),
-        Line::from(Span::styled(format!(" ◉ Total: {} repos", s.total_jobs), Style::default().fg(COLOR_PRIMARY_BRIGHT).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled(format!("   ✓ Cloned: {}", s.cloned), Style::default().fg(COLOR_SUCCESS_BRIGHT))),
-        Line::from(Span::styled(format!("   ✓ Updated: {}", s.updated), Style::default().fg(COLOR_SUCCESS_BRIGHT))),
-        Line::from(Span::styled(format!("   · Up-to-date: {}", s.up_to_date), Style::default().fg(COLOR_MUTED))),
-        Line::from(Span::styled(format!("   ✗ Failed: {}", s.failed), Style::default().fg(COLOR_ERROR_BRIGHT))),
-        Line::from(Span::styled(format!("   Bytes: {}", s.bytes_transferred), Style::default().fg(COLOR_MUTED))),
-        Line::from(Span::styled(format!("   Duration: {:?}", s.duration), Style::default().fg(COLOR_MUTED))),
+        Line::from(Span::styled(
+            format!(" ◉ Total: {} repos", s.total_jobs),
+            Style::default()
+                .fg(COLOR_PRIMARY_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("   ✓ Cloned: {}", s.cloned),
+            Style::default().fg(COLOR_SUCCESS_BRIGHT),
+        )),
+        Line::from(Span::styled(
+            format!("   ✓ Updated: {}", s.updated),
+            Style::default().fg(COLOR_SUCCESS_BRIGHT),
+        )),
+        Line::from(Span::styled(
+            format!("   · Up-to-date: {}", s.up_to_date),
+            Style::default().fg(COLOR_MUTED),
+        )),
+        Line::from(Span::styled(
+            format!("   ✗ Failed: {}", s.failed),
+            Style::default().fg(COLOR_ERROR_BRIGHT),
+        )),
+        Line::from(Span::styled(
+            format!("   Bytes: {}", s.bytes_transferred),
+            Style::default().fg(COLOR_MUTED),
+        )),
+        Line::from(Span::styled(
+            format!("   Duration: {:?}", s.duration),
+            Style::default().fg(COLOR_MUTED),
+        )),
     ];
-    let p = Paragraph::new(body)
-        .block(Block::default().borders(Borders::ALL).title(" ✓ Sync Completed "));
+    let p = Paragraph::new(body).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" ✓ Sync Completed "),
+    );
     f.render_widget(p, area);
 }
 
 fn render_cancelled(f: &mut Frame, area: Rect, s: &git_vacuum_core::PartialSyncSummary) {
     let body = vec![
         Line::from(""),
-        Line::from(Span::styled(" Sync was cancelled.", Style::default().fg(COLOR_WARNING_BRIGHT).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled(format!("   Completed: {}", s.completed), Style::default().fg(COLOR_SUCCESS_BRIGHT))),
-        Line::from(Span::styled(format!("   Failed: {}", s.failed), Style::default().fg(COLOR_ERROR_BRIGHT))),
-        Line::from(Span::styled(format!("   Cancelled mid-operation: {}", s.cancelled), Style::default().fg(COLOR_WARNING_BRIGHT))),
-        Line::from(Span::styled(format!("   Pending dropped: {}", s.pending_dropped), Style::default().fg(COLOR_MUTED))),
+        Line::from(Span::styled(
+            " Sync was cancelled.",
+            Style::default()
+                .fg(COLOR_WARNING_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("   Completed: {}", s.completed),
+            Style::default().fg(COLOR_SUCCESS_BRIGHT),
+        )),
+        Line::from(Span::styled(
+            format!("   Failed: {}", s.failed),
+            Style::default().fg(COLOR_ERROR_BRIGHT),
+        )),
+        Line::from(Span::styled(
+            format!("   Cancelled mid-operation: {}", s.cancelled),
+            Style::default().fg(COLOR_WARNING_BRIGHT),
+        )),
+        Line::from(Span::styled(
+            format!("   Pending dropped: {}", s.pending_dropped),
+            Style::default().fg(COLOR_MUTED),
+        )),
     ];
-    let p = Paragraph::new(body)
-        .block(Block::default().borders(Borders::ALL).title(" ⊘ Sync Cancelled "));
+    let p = Paragraph::new(body).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" ⊘ Sync Cancelled "),
+    );
     f.render_widget(p, area);
 }

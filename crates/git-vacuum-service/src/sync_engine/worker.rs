@@ -9,8 +9,8 @@ use git_vacuum_core::{
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
-use crate::Services;
 use crate::sync_engine::ProgressTracker;
+use crate::Services;
 
 pub struct Worker {
     pub services: Arc<Services>,
@@ -18,10 +18,10 @@ pub struct Worker {
     pub progress_tx: mpsc::UnboundedSender<AppEvent>,
     pub app_tx: mpsc::UnboundedSender<AppEvent>,
     pub cancel_rx: watch::Receiver<bool>,
-    pub pause_flag: Arc<std::sync::atomic::AtomicBool>,
+    pub _pause_flag: Arc<std::sync::atomic::AtomicBool>,
     pub tracker: Arc<ProgressTracker>,
     pub result_tx: mpsc::Sender<JobOutcome>,
-    pub run_id: Option<i64>,
+    pub _run_id: Option<i64>,
 }
 
 pub enum JobOutcome {
@@ -49,6 +49,7 @@ pub enum JobOutcome {
         repo_id: Option<i64>,
         error: String,
     },
+    #[allow(dead_code)]
     Cancelled {
         job_id: JobId,
         repo_full_name: String,
@@ -98,7 +99,13 @@ impl Worker {
         let full_name = self.job.repo_full_name.clone();
 
         // Look up local repo id (best-effort)
-        let repo_id = self.services.db.get_repo(self.job.repo_github_id).ok().flatten().map(|r| r.id);
+        let repo_id = self
+            .services
+            .db
+            .get_repo(self.job.repo_github_id)
+            .ok()
+            .flatten()
+            .map(|r| r.id);
 
         let outcome = match self.job.operation {
             PlannedOperation::Clone => self.run_clone().await,
@@ -106,7 +113,11 @@ impl Worker {
             PlannedOperation::Mirror => self.run_clone().await, // MVP: treat as clone
             PlannedOperation::Skip { .. } => {
                 self.tracker.skipped.fetch_add(1, Ordering::Relaxed);
-                JobOutcome::UpToDate { job_id, repo_full_name: full_name, repo_id }
+                JobOutcome::UpToDate {
+                    job_id,
+                    repo_full_name: full_name,
+                    repo_id,
+                }
             }
         };
         let _ = self.result_tx.send(outcome).await;
@@ -117,7 +128,13 @@ impl Worker {
         let full_name = self.job.repo_full_name.clone();
         let path = self.job.local_path.clone();
         let url = self.job.clone_url.clone();
-        let repo_id = self.services.db.get_repo(self.job.repo_github_id).ok().flatten().map(|r| r.id);
+        let repo_id = self
+            .services
+            .db
+            .get_repo(self.job.repo_github_id)
+            .ok()
+            .flatten()
+            .map(|r| r.id);
 
         self.tracker.register_active(crate::sync_engine::ActiveJob {
             job_id,
@@ -126,11 +143,19 @@ impl Worker {
             bytes_total: 0,
             started_at: Instant::now(),
         });
-        let _ = self.app_tx.send(AppEvent::SyncCloneStarted { job_id, repo_full_name: full_name.clone() });
+        let _ = self.app_tx.send(AppEvent::SyncCloneStarted {
+            job_id,
+            repo_full_name: full_name.clone(),
+        });
 
         let on_progress = make_progress_cb(self.progress_tx.clone(), job_id, full_name.clone());
         let cancel = self.cancel_rx.clone();
-        match self.services.git.clone_with_progress(&url, &path, on_progress, cancel).await {
+        match self
+            .services
+            .git
+            .clone_with_progress(&url, &path, on_progress, cancel)
+            .await
+        {
             Ok(stats) => {
                 self.tracker.cloned.fetch_add(1, Ordering::Relaxed);
                 let _ = self.services.db.update_local_status(
@@ -164,7 +189,13 @@ impl Worker {
         let job_id = self.job.job_id;
         let full_name = self.job.repo_full_name.clone();
         let path = self.job.local_path.clone();
-        let repo_id = self.services.db.get_repo(self.job.repo_github_id).ok().flatten().map(|r| r.id);
+        let repo_id = self
+            .services
+            .db
+            .get_repo(self.job.repo_github_id)
+            .ok()
+            .flatten()
+            .map(|r| r.id);
 
         self.tracker.register_active(crate::sync_engine::ActiveJob {
             job_id,
@@ -173,7 +204,10 @@ impl Worker {
             bytes_total: 0,
             started_at: Instant::now(),
         });
-        let _ = self.app_tx.send(AppEvent::SyncFetchStarted { job_id, repo_full_name: full_name.clone() });
+        let _ = self.app_tx.send(AppEvent::SyncFetchStarted {
+            job_id,
+            repo_full_name: full_name.clone(),
+        });
 
         let on_progress = make_progress_cb(self.progress_tx.clone(), job_id, full_name.clone());
         let cancel = self.cancel_rx.clone();
@@ -191,7 +225,11 @@ impl Worker {
                     },
                 );
                 if result.new_commits == 0 && result.behind_count == 0 {
-                    JobOutcome::UpToDate { job_id, repo_full_name: full_name, repo_id }
+                    JobOutcome::UpToDate {
+                        job_id,
+                        repo_full_name: full_name,
+                        repo_id,
+                    }
                 } else {
                     JobOutcome::Updated {
                         job_id,
@@ -237,6 +275,6 @@ fn make_progress_cb(
 }
 
 #[allow(dead_code)]
-pub fn path_for_job(base: &PathBuf, job: &JobSpec) -> PathBuf {
+pub fn path_for_job(_base: &PathBuf, job: &JobSpec) -> PathBuf {
     job.local_path.clone()
 }

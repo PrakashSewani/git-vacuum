@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use git_vacuum_core::{JobId, JobSpec, PlannedOperation, Priority, RepoEntry};
@@ -6,10 +6,7 @@ use git_vacuum_core::{JobId, JobSpec, PlannedOperation, Priority, RepoEntry};
 use crate::Services;
 use crate::SyncRequest;
 
-pub async fn resolve_plan(
-    services: &Arc<Services>,
-    request: &SyncRequest,
-) -> Vec<JobSpec> {
+pub async fn resolve_plan(services: &Arc<Services>, request: &SyncRequest) -> Vec<JobSpec> {
     // For PAT-authenticated clones we MUST embed the token in the URL, because
     // SSH would require the user to have set up a GitHub SSH key. The plan
     // embeds the token once per repo into the HTTPS clone URL. The token is
@@ -43,17 +40,20 @@ pub async fn resolve_plan(
         let clone_url = match &token {
             Some(tok) if !tok.is_empty() => {
                 // Strip the leading "https://" and inject the credentials.
-                if let Some(rest) = repo.clone_url_https.strip_prefix("https://").map(str::to_string) {
+                if let Some(rest) = repo
+                    .clone_url_https
+                    .strip_prefix("https://")
+                    .map(str::to_string)
+                {
                     format!("https://x-access-token:{}@{}", tok, rest)
                 } else {
                     repo.clone_url_https.clone()
                 }
             }
-            _ => {
-                repo.clone_url_ssh
-                    .clone()
-                    .unwrap_or_else(|| repo.clone_url_https.clone())
-            }
+            _ => repo
+                .clone_url_ssh
+                .clone()
+                .unwrap_or_else(|| repo.clone_url_https.clone()),
         };
 
         jobs.push(JobSpec {
@@ -72,6 +72,6 @@ pub async fn resolve_plan(
 }
 
 #[allow(dead_code)]
-pub fn path_for(base: &PathBuf, repo: &RepoEntry) -> PathBuf {
+pub fn path_for(base: &Path, repo: &RepoEntry) -> PathBuf {
     base.join(&repo.owner_login).join(&repo.name)
 }

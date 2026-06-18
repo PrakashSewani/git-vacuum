@@ -5,14 +5,26 @@ use rusqlite::{params, Connection};
 use crate::SqliteErr;
 
 pub fn dashboard(conn: &Connection) -> Result<DashboardStats, SqliteErr> {
-    let total_repos: i64 = conn
-        .query_row("SELECT COUNT(*) FROM repos WHERE deleted_on_remote = 0", [], |r| r.get(0))?;
-    let up_to_date: i64 = conn
-        .query_row("SELECT COUNT(*) FROM repos WHERE clone_status = 'cloned' AND behind_count = 0", [], |r| r.get(0))?;
-    let behind: i64 = conn
-        .query_row("SELECT COUNT(*) FROM repos WHERE clone_status = 'cloned' AND behind_count > 0", [], |r| r.get(0))?;
-    let errors: i64 = conn
-        .query_row("SELECT COUNT(*) FROM repos WHERE clone_status = 'error'", [], |r| r.get(0))?;
+    let total_repos: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM repos WHERE deleted_on_remote = 0",
+        [],
+        |r| r.get(0),
+    )?;
+    let up_to_date: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM repos WHERE clone_status = 'cloned' AND behind_count = 0",
+        [],
+        |r| r.get(0),
+    )?;
+    let behind: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM repos WHERE clone_status = 'cloned' AND behind_count > 0",
+        [],
+        |r| r.get(0),
+    )?;
+    let errors: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM repos WHERE clone_status = 'error'",
+        [],
+        |r| r.get(0),
+    )?;
     let total_size: i64 = conn.query_row(
         "SELECT COALESCE(SUM(local_size_kb), 0) FROM repos",
         [],
@@ -62,14 +74,23 @@ pub fn attention_list(conn: &Connection, limit: usize) -> Result<Vec<AttentionIt
             }
         });
         let ts = last_synced
-            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc)))
+            .and_then(|s| {
+                DateTime::parse_from_rfc3339(&s)
+                    .ok()
+                    .map(|d| d.with_timezone(&Utc))
+            })
             .or_else(|| {
                 DateTime::parse_from_rfc3339(&updated)
                     .ok()
                     .map(|d| d.with_timezone(&Utc))
             })
             .unwrap_or_else(Utc::now);
-        Ok(AttentionItem { full_name, reason, detail, last_event_at: ts })
+        Ok(AttentionItem {
+            full_name,
+            reason,
+            detail,
+            last_event_at: ts,
+        })
     })?;
     let mut out = Vec::new();
     for r in rows {

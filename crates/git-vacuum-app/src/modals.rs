@@ -93,16 +93,56 @@ impl CommandPaletteState {
 pub fn default_commands() -> Vec<CommandEntry> {
     use crate::state::TabKind;
     vec![
-        CommandEntry { name: "Go to Dashboard".into(), description: "Switch to the Dashboard tab".into(), action: CommandAction::SwitchTab(TabKind::Dashboard) },
-        CommandEntry { name: "Go to Explorer".into(), description: "Switch to the Explorer tab".into(), action: CommandAction::SwitchTab(TabKind::Explorer) },
-        CommandEntry { name: "Go to Sync Center".into(), description: "Switch to the Sync Center tab".into(), action: CommandAction::SwitchTab(TabKind::SyncCenter) },
-        CommandEntry { name: "Go to Activity Log".into(), description: "Switch to the Activity Log tab".into(), action: CommandAction::SwitchTab(TabKind::ActivityLog) },
-        CommandEntry { name: "Go to Settings".into(), description: "Switch to the Settings tab".into(), action: CommandAction::SwitchTab(TabKind::Settings) },
-        CommandEntry { name: "Refresh Dashboard Stats".into(), description: "Reload dashboard stats from DB".into(), action: CommandAction::RefreshDashboard },
-        CommandEntry { name: "Start Sync".into(), description: "Start syncing selected repos".into(), action: CommandAction::StartSync },
-        CommandEntry { name: "Show Help".into(), description: "Open the keyboard help overlay".into(), action: CommandAction::OpenHelp },
-        CommandEntry { name: "Log out".into(), description: "Clear stored token and return to auth".into(), action: CommandAction::Logout },
-        CommandEntry { name: "Quit".into(), description: "Exit git-vacuum".into(), action: CommandAction::Quit },
+        CommandEntry {
+            name: "Go to Dashboard".into(),
+            description: "Switch to the Dashboard tab".into(),
+            action: CommandAction::SwitchTab(TabKind::Dashboard),
+        },
+        CommandEntry {
+            name: "Go to Explorer".into(),
+            description: "Switch to the Explorer tab".into(),
+            action: CommandAction::SwitchTab(TabKind::Explorer),
+        },
+        CommandEntry {
+            name: "Go to Sync Center".into(),
+            description: "Switch to the Sync Center tab".into(),
+            action: CommandAction::SwitchTab(TabKind::SyncCenter),
+        },
+        CommandEntry {
+            name: "Go to Activity Log".into(),
+            description: "Switch to the Activity Log tab".into(),
+            action: CommandAction::SwitchTab(TabKind::ActivityLog),
+        },
+        CommandEntry {
+            name: "Go to Settings".into(),
+            description: "Switch to the Settings tab".into(),
+            action: CommandAction::SwitchTab(TabKind::Settings),
+        },
+        CommandEntry {
+            name: "Refresh Dashboard Stats".into(),
+            description: "Reload dashboard stats from DB".into(),
+            action: CommandAction::RefreshDashboard,
+        },
+        CommandEntry {
+            name: "Start Sync".into(),
+            description: "Start syncing selected repos".into(),
+            action: CommandAction::StartSync,
+        },
+        CommandEntry {
+            name: "Show Help".into(),
+            description: "Open the keyboard help overlay".into(),
+            action: CommandAction::OpenHelp,
+        },
+        CommandEntry {
+            name: "Log out".into(),
+            description: "Clear stored token and return to auth".into(),
+            action: CommandAction::Logout,
+        },
+        CommandEntry {
+            name: "Quit".into(),
+            description: "Exit git-vacuum".into(),
+            action: CommandAction::Quit,
+        },
     ]
 }
 

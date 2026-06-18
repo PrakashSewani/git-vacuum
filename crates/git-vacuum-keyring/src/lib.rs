@@ -12,7 +12,9 @@ pub struct PlatformKeyring {
 impl PlatformKeyring {
     pub fn new() -> Result<Self, KeyringError> {
         let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(map_keyring_error)?;
-        Ok(Self { entry: Mutex::new(Some(entry)) })
+        Ok(Self {
+            entry: Mutex::new(Some(entry)),
+        })
     }
 }
 
@@ -75,9 +77,13 @@ mod tests {
         let kr = kr.unwrap();
 
         let _ = kr.delete_token();
-        kr.set_token("ghp_test_round_trip_xxxxxxxxxxxxxxxxxxxx").expect("set");
+        kr.set_token("ghp_test_round_trip_xxxxxxxxxxxxxxxxxxxx")
+            .expect("set");
         let got = kr.get_token().expect("get");
-        assert_eq!(got.as_deref(), Some("ghp_test_round_trip_xxxxxxxxxxxxxxxxxxxx"));
+        assert_eq!(
+            got.as_deref(),
+            Some("ghp_test_round_trip_xxxxxxxxxxxxxxxxxxxx")
+        );
         kr.delete_token().expect("delete");
         let after = kr.get_token().expect("get after delete");
         assert!(after.is_none());

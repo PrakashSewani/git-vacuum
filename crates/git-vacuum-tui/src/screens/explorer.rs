@@ -4,10 +4,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use git_vacuum_app::tabs::ExplorerTabState;
-use git_vacuum_core::RepoEntry;
 use crate::components::{format_repo_row, highlight_style, spinner_frame};
 use crate::theme::{COLOR_MUTED, COLOR_PRIMARY, COLOR_PRIMARY_BRIGHT};
+use git_vacuum_app::tabs::ExplorerTabState;
+use git_vacuum_core::RepoEntry;
 
 pub fn render_explorer(
     f: &mut Frame,
@@ -19,9 +19,9 @@ pub fn render_explorer(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // source selector + filters
-            Constraint::Min(0),     // repo table
-            Constraint::Length(2),  // status line
+            Constraint::Length(3), // source selector + filters
+            Constraint::Min(0),    // repo table
+            Constraint::Length(2), // status line
         ])
         .margin(1)
         .split(area);
@@ -35,7 +35,9 @@ pub fn render_explorer(
     };
     let source_chip = Span::styled(
         format!(" {} ", source_str),
-        Style::default().fg(COLOR_PRIMARY_BRIGHT).bg(ratatui::style::Color::Rgb(30, 30, 44)),
+        Style::default()
+            .fg(COLOR_PRIMARY_BRIGHT)
+            .bg(ratatui::style::Color::Rgb(30, 30, 44)),
     );
     let filter_chip = if state.filter_text.is_empty() {
         Span::styled("  Filter: (none)  ", Style::default().fg(COLOR_MUTED))
@@ -71,31 +73,33 @@ pub fn render_explorer(
     let items: Vec<ListItem> = if repos.is_empty() {
         if state.loading {
             // Animated skeleton rows
-            (0..6).map(|i| {
-                let shimmer_phase = (i as u64 + tick / 3) % 6;
-                let shimmer = match shimmer_phase {
-                    0 => "▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
-                    1 => "▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
-                    2 => "░▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
-                    3 => "░░▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
-                    4 => "░░░▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
-                    _ => "░░░░▒▓▓▓▓▓▓▓▓▓▓▓▓▓",
-                };
-                let name_pad = match i {
-                    0 => "████████████████████",
-                    1 => "██████████████",
-                    2 => "████████████████████████",
-                    3 => "████████████",
-                    4 => "██████████████████████",
-                    _ => "██████████████████",
-                };
-                ListItem::new(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(name_pad, Style::default().fg(COLOR_MUTED)),
-                    Span::raw("   "),
-                    Span::styled(shimmer, Style::default().fg(COLOR_PRIMARY_BRIGHT)),
-                ]))
-            }).collect()
+            (0..6)
+                .map(|i| {
+                    let shimmer_phase = (i as u64 + tick / 3) % 6;
+                    let shimmer = match shimmer_phase {
+                        0 => "▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
+                        1 => "▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
+                        2 => "░▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
+                        3 => "░░▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
+                        4 => "░░░▒▓▓▓▓▓▓▓▓▓▓▓▓▓▓",
+                        _ => "░░░░▒▓▓▓▓▓▓▓▓▓▓▓▓▓",
+                    };
+                    let name_pad = match i {
+                        0 => "████████████████████",
+                        1 => "██████████████",
+                        2 => "████████████████████████",
+                        3 => "████████████",
+                        4 => "██████████████████████",
+                        _ => "██████████████████",
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(name_pad, Style::default().fg(COLOR_MUTED)),
+                        Span::raw("   "),
+                        Span::styled(shimmer, Style::default().fg(COLOR_PRIMARY_BRIGHT)),
+                    ]))
+                })
+                .collect()
         } else {
             vec![ListItem::new(Line::from(Span::styled(
                 "  No repositories found. Press 'r' to refresh.",
@@ -128,12 +132,12 @@ pub fn render_explorer(
                 ListItem::new(Line::from(Span::styled(
                     row_text,
                     if is_selected { style } else { Style::default() },
-                ))).style(if is_selected { style } else { Style::default() })
+                )))
+                .style(if is_selected { style } else { Style::default() })
             })
             .collect()
     };
-    let table = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title));
+    let table = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(table, chunks[1]);
 
     // Status

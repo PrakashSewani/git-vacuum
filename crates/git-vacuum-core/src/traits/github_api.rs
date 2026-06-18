@@ -18,8 +18,13 @@ pub struct DeviceFlowInit {
 #[derive(Debug, Clone)]
 pub enum DeviceFlowPoll {
     Pending,
-    Success { access_token: String, scopes: Vec<String> },
-    SlowDown { new_interval: Duration },
+    Success {
+        access_token: String,
+        scopes: Vec<String>,
+    },
+    SlowDown {
+        new_interval: Duration,
+    },
     Expired,
     AccessDenied,
 }
@@ -30,7 +35,9 @@ pub struct PagedStream<T> {
 
 impl<T> PagedStream<T> {
     pub fn empty() -> Self {
-        Self { _marker: std::marker::PhantomData }
+        Self {
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 
@@ -43,9 +50,14 @@ pub trait GithubApi: Send + Sync {
     async fn get_authenticated_user(&self) -> Result<UserInfo, crate::error::AuthError>;
 
     async fn list_my_repos(&self) -> Result<Vec<RemoteRepo>, crate::error::DiscoveryError>;
-    async fn list_org_repos(&self, org: &str) -> Result<Vec<RemoteRepo>, crate::error::DiscoveryError>;
+    async fn list_org_repos(
+        &self,
+        org: &str,
+    ) -> Result<Vec<RemoteRepo>, crate::error::DiscoveryError>;
     async fn list_starred_repos(&self) -> Result<Vec<RemoteRepo>, crate::error::DiscoveryError>;
-    async fn list_all_accessible_repos(&self) -> Result<Vec<RemoteRepo>, crate::error::DiscoveryError>;
+    async fn list_all_accessible_repos(
+        &self,
+    ) -> Result<Vec<RemoteRepo>, crate::error::DiscoveryError>;
 
     async fn list_my_orgs(&self) -> Result<Vec<OrgInfo>, crate::error::DiscoveryError>;
 

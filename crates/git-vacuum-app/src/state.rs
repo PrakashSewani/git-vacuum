@@ -1,11 +1,12 @@
 use std::time::Instant;
 
-use git_vacuum_core::UserInfo;
-pub use git_vacuum_core::AuthMethodChoice;
 use crate::modals;
 use crate::tabs::TabStates;
+pub use git_vacuum_core::AuthMethodChoice;
+use git_vacuum_core::UserInfo;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum AppState {
     Auth(AuthScreenState),
     Running(RunningAppState),

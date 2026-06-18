@@ -28,8 +28,8 @@ impl From<rusqlite::Error> for SqliteErr {
 }
 
 use git_vacuum_core::{
-    AttentionItem, DashboardStats, Database, LocalStatus, NewSyncEntry, NewSyncRun,
-    RepoRow, SizeBucket, SyncRunUpdate, UserInfo,
+    AttentionItem, DashboardStats, Database, LocalStatus, NewSyncEntry, NewSyncRun, RepoRow,
+    SizeBucket, SyncRunUpdate, UserInfo,
 };
 use parking_lot::Mutex;
 use rusqlite::Connection;
@@ -43,15 +43,22 @@ pub struct SqliteDatabase {
 impl SqliteDatabase {
     pub fn open(path: &Path) -> Result<Self, DbError> {
         let conn = connection::open_connection(path)?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     pub fn open_in_memory() -> Result<Self, DbError> {
         let conn = connection::open_in_memory()?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
-    pub fn with_conn<R>(&self, f: impl FnOnce(&Connection) -> Result<R, SqliteErr>) -> Result<R, DbError> {
+    pub fn with_conn<R>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<R, SqliteErr>,
+    ) -> Result<R, DbError> {
         let guard = self.conn.lock();
         f(&guard).map_err(Into::into)
     }
@@ -59,7 +66,7 @@ impl SqliteDatabase {
 
 impl Database for SqliteDatabase {
     fn run_migrations(&self) -> Result<(), DbError> {
-        self.with_conn(|c| migrations::run(c))
+        self.with_conn(migrations::run)
     }
 
     fn upsert_repos(&self, repos_list: &[RepoRow]) -> Result<(), DbError> {

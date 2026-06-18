@@ -9,8 +9,6 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use git_vacuum_app::state::{AppState, RunningAppState};
-use git_vacuum_app::App;
 use crate::components::{activity_banner, key_bar, tab_bar, title_bar};
 use crate::layout::shell_layout;
 use crate::screens::activity_log::render_activity_log;
@@ -21,6 +19,8 @@ use crate::screens::settings::render_settings;
 use crate::screens::sync_center::render_sync_center;
 use crate::screens::welcome::render_welcome as render_welcome_screen;
 use crate::theme::{COLOR_BG_BANNER, COLOR_MUTED, COLOR_PRIMARY};
+use git_vacuum_app::state::{AppState, RunningAppState};
+use git_vacuum_app::App;
 
 /// Main entry point: render the entire UI for the current app state.
 pub fn render(f: &mut Frame, app: &App) {
@@ -70,8 +70,7 @@ pub fn render(f: &mut Frame, app: &App) {
             // Activity banner
             if show_banner {
                 if let Some(banner) = activity_banner(&r.loading, tick) {
-                    let widget = Paragraph::new(banner)
-                        .style(Style::default().bg(COLOR_BG_BANNER));
+                    let widget = Paragraph::new(banner).style(Style::default().bg(COLOR_BG_BANNER));
                     f.render_widget(widget, chunks[next_chunk_idx]);
                 }
                 next_chunk_idx += 1;
@@ -84,28 +83,40 @@ pub fn render(f: &mut Frame, app: &App) {
             // Key bar
             let bindings: Vec<(&str, &str)> = match r.active_tab {
                 git_vacuum_app::state::TabKind::Dashboard => vec![
-                    ("r", "refresh"), ("s", "sync"), ("?", "help"), ("1-5", "tab"), ("q", "quit"),
+                    ("r", "refresh"),
+                    ("s", "sync"),
+                    ("?", "help"),
+                    ("1-5", "tab"),
+                    ("q", "quit"),
                 ],
                 git_vacuum_app::state::TabKind::Explorer => vec![
-                    ("↑↓", "navigate"), ("Space", "toggle"), ("Enter", "sync"),
-                    ("Ctrl+A", "all"), ("/", "filter"), ("?", "help"),
+                    ("↑↓", "navigate"),
+                    ("Space", "toggle"),
+                    ("Enter", "sync"),
+                    ("Ctrl+A", "all"),
+                    ("/", "filter"),
+                    ("?", "help"),
                 ],
                 git_vacuum_app::state::TabKind::SyncCenter => vec![
-                    ("p", "pause"), ("r", "resume"), ("c", "cancel"),
-                    ("?", "help"), ("q", "quit"),
+                    ("p", "pause"),
+                    ("r", "resume"),
+                    ("c", "cancel"),
+                    ("?", "help"),
+                    ("q", "quit"),
                 ],
-                git_vacuum_app::state::TabKind::ActivityLog => vec![
-                    ("Enter", "view"), ("r", "refresh"), ("?", "help"),
-                ],
+                git_vacuum_app::state::TabKind::ActivityLog => {
+                    vec![("Enter", "view"), ("r", "refresh"), ("?", "help")]
+                }
                 git_vacuum_app::state::TabKind::Settings => vec![
-                    ("Tab", "category"), ("↑↓", "navigate"), ("Enter", "edit"),
-                    ("Ctrl+S", "save"), ("Esc", "discard"), ("?", "help"),
+                    ("Tab", "category"),
+                    ("↑↓", "navigate"),
+                    ("Enter", "edit"),
+                    ("Ctrl+S", "save"),
+                    ("Esc", "discard"),
+                    ("?", "help"),
                 ],
             };
-            f.render_widget(
-                Paragraph::new(key_bar(&bindings)),
-                chunks[next_chunk_idx],
-            );
+            f.render_widget(Paragraph::new(key_bar(&bindings)), chunks[next_chunk_idx]);
         }
         AppState::FatalError(msg) => {
             let p = Paragraph::new(format!("\n  FATAL: {msg}\n\n  Press q to quit."))
@@ -120,7 +131,9 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 fn render_active_tab(f: &mut Frame, area: Rect, app: &App, tick: u64) {
-    let AppState::Running(state) = &app.state else { return };
+    let AppState::Running(state) = &app.state else {
+        return;
+    };
     let area = centered(area);
     match state.active_tab {
         git_vacuum_app::state::TabKind::Dashboard => {
@@ -142,8 +155,18 @@ fn render_active_tab(f: &mut Frame, area: Rect, app: &App, tick: u64) {
 }
 
 fn render_welcome(f: &mut Frame, area: Rect, state: &RunningAppState, tick: u64) {
-    let welcome = state.welcome_state.as_ref().expect("welcome_state must be Some");
-    render_welcome_screen(f, area, &welcome.user, welcome.repos_count, welcome.phase, tick);
+    let welcome = state
+        .welcome_state
+        .as_ref()
+        .expect("welcome_state must be Some");
+    render_welcome_screen(
+        f,
+        area,
+        &welcome.user,
+        welcome.repos_count,
+        welcome.phase,
+        tick,
+    );
 }
 
 fn centered(area: Rect) -> Rect {
@@ -166,9 +189,7 @@ pub fn render_modal(f: &mut Frame, area: Rect, title: &str, body: &str) {
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = centered(area);
     f.render_widget(Clear, inner);
-    let p = Paragraph::new(body)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let p = Paragraph::new(body).block(block).wrap(Wrap { trim: false });
     f.render_widget(p, inner);
 }
 

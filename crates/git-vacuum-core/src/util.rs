@@ -1,9 +1,18 @@
 use std::time::Duration;
 
-pub fn exponential_backoff(attempt: u32, base: Duration, multiplier: f64, cap: Duration) -> Duration {
+pub fn exponential_backoff(
+    attempt: u32,
+    base: Duration,
+    multiplier: f64,
+    cap: Duration,
+) -> Duration {
     let exp = multiplier.powi(attempt as i32);
     let delay = base.mul_f64(exp);
-    if delay > cap { cap } else { delay }
+    if delay > cap {
+        cap
+    } else {
+        delay
+    }
 }
 
 pub fn human_bytes(bytes: u64) -> String {
@@ -50,12 +59,30 @@ mod tests {
     fn backoff_grows_then_caps() {
         let base = Duration::from_secs(5);
         let cap = Duration::from_secs(60);
-        assert_eq!(exponential_backoff(0, base, 2.0, cap), Duration::from_secs(5));
-        assert_eq!(exponential_backoff(1, base, 2.0, cap), Duration::from_secs(10));
-        assert_eq!(exponential_backoff(2, base, 2.0, cap), Duration::from_secs(20));
-        assert_eq!(exponential_backoff(3, base, 2.0, cap), Duration::from_secs(40));
-        assert_eq!(exponential_backoff(4, base, 2.0, cap), Duration::from_secs(60));
-        assert_eq!(exponential_backoff(10, base, 2.0, cap), Duration::from_secs(60));
+        assert_eq!(
+            exponential_backoff(0, base, 2.0, cap),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            exponential_backoff(1, base, 2.0, cap),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            exponential_backoff(2, base, 2.0, cap),
+            Duration::from_secs(20)
+        );
+        assert_eq!(
+            exponential_backoff(3, base, 2.0, cap),
+            Duration::from_secs(40)
+        );
+        assert_eq!(
+            exponential_backoff(4, base, 2.0, cap),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            exponential_backoff(10, base, 2.0, cap),
+            Duration::from_secs(60)
+        );
     }
 
     #[test]

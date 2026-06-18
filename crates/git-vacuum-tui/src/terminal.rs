@@ -20,8 +20,13 @@ pub fn init() -> io::Result<Tui> {
     // reads the clipboard with arboard.
     #[cfg(not(windows))]
     {
-        use crossterm::event::{EnableBracketedPaste};
-        let _ = execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste);
+        use crossterm::event::EnableBracketedPaste;
+        let _ = execute!(
+            out,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        );
     }
     #[cfg(windows)]
     {
@@ -36,8 +41,13 @@ pub fn restore() -> io::Result<()> {
     let mut out = std::io::stdout();
     #[cfg(not(windows))]
     {
-        use crossterm::event::{DisableBracketedPaste};
-        let _ = execute!(out, LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste);
+        use crossterm::event::DisableBracketedPaste;
+        let _ = execute!(
+            out,
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
     }
     #[cfg(windows)]
     {

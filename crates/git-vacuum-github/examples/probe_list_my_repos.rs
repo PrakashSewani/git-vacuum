@@ -40,12 +40,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("\n=== GET /user/repos?per_page=100&affiliation=owner,collaborator,organization_member ===");
+    println!(
+        "\n=== GET /user/repos?per_page=100&affiliation=owner,collaborator,organization_member ==="
+    );
     let repos = api.list_my_repos().await?;
     println!("  count = {}", repos.len());
-    let mut org_owned = 0usize;
-    let mut user_owned = 0usize;
-    let mut unknown = 0usize;
+    let _org_owned = 0usize;
+    let _user_owned = 0usize;
+    let _unknown = 0usize;
     for r in &repos {
         // We can't see owner_is_org directly here because OctocrabGithubApi
         // already mapped it. But we can detect by owner_login:
@@ -53,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         //   - otherwise, it's via org membership (almost certainly)
         // Print first 20 with full detail.
         if r.full_name.contains('/') {
-            let (owner, name) = r.full_name.split_once('/').unwrap();
+            let (owner, _name) = r.full_name.split_once('/').unwrap();
             if owner == "you" { /* placeholder */ }
         }
     }
@@ -64,7 +66,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             i,
             r.full_name,
             r.owner_login,
-            if r.clone_url_ssh.is_some() { "yes" } else { "no" }
+            if r.clone_url_ssh.is_some() {
+                "yes"
+            } else {
+                "no"
+            }
         );
     }
     if repos.len() > 20 {

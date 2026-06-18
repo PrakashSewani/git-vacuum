@@ -53,20 +53,15 @@ impl Default for ExplorerTabState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum SyncPhase {
+    #[default]
     Idle,
     PreSync,
     Active,
     Paused,
     Completed(git_vacuum_core::SyncSummary),
     Cancelled(git_vacuum_core::PartialSyncSummary),
-}
-
-impl Default for SyncPhase {
-    fn default() -> Self {
-        SyncPhase::Idle
-    }
 }
 
 #[derive(Debug, Clone, Default)]

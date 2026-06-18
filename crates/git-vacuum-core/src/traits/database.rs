@@ -82,13 +82,22 @@ pub trait Database: Send + Sync {
         github_id: i64,
         status: &LocalStatus,
     ) -> Result<(), crate::error::DbError>;
-    fn set_repo_selected(&self, github_id: i64, selected: bool) -> Result<(), crate::error::DbError>;
-    fn set_repos_selected(&self, github_ids: &[i64], selected: bool) -> Result<(), crate::error::DbError>;
+    fn set_repo_selected(
+        &self,
+        github_id: i64,
+        selected: bool,
+    ) -> Result<(), crate::error::DbError>;
+    fn set_repos_selected(
+        &self,
+        github_ids: &[i64],
+        selected: bool,
+    ) -> Result<(), crate::error::DbError>;
     fn mark_repo_deleted_on_remote(&self, github_id: i64) -> Result<(), crate::error::DbError>;
     fn prune_deleted_repos(&self) -> Result<usize, crate::error::DbError>;
 
     fn insert_sync_run(&self, run: &NewSyncRun) -> Result<i64, crate::error::DbError>;
-    fn update_sync_run(&self, id: i64, update: &SyncRunUpdate) -> Result<(), crate::error::DbError>;
+    fn update_sync_run(&self, id: i64, update: &SyncRunUpdate)
+        -> Result<(), crate::error::DbError>;
     fn get_sync_runs(&self, limit: usize) -> Result<Vec<SyncRunRow>, crate::error::DbError>;
     fn get_sync_run(&self, id: i64) -> Result<Option<SyncRunRow>, crate::error::DbError>;
     fn mark_orphaned_runs_cancelled(&self) -> Result<usize, crate::error::DbError>;
@@ -104,7 +113,8 @@ pub trait Database: Send + Sync {
     fn clear_active_account(&self) -> Result<(), crate::error::DbError>;
 
     fn get_dashboard_stats(&self) -> Result<DashboardStats, crate::error::DbError>;
-    fn get_attention_list(&self, limit: usize) -> Result<Vec<AttentionItem>, crate::error::DbError>;
+    fn get_attention_list(&self, limit: usize)
+        -> Result<Vec<AttentionItem>, crate::error::DbError>;
     fn get_size_distribution(&self) -> Result<Vec<SizeBucket>, crate::error::DbError>;
 }
 

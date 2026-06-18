@@ -24,7 +24,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(services: Arc<Services>, event_bus: EventBusHandle, oauth_client_id: Option<String>) -> Self {
+    pub fn new(
+        services: Arc<Services>,
+        event_bus: EventBusHandle,
+        oauth_client_id: Option<String>,
+    ) -> Self {
         let mut state = state::AppState::Auth(state::AuthScreenState::default());
         if let state::AppState::Auth(auth) = &mut state {
             auth.oauth_client_id = oauth_client_id.clone();

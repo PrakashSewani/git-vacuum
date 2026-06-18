@@ -124,76 +124,181 @@ pub enum AuthMethodChoice {
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
-    AuthSucceeded { info: UserInfo },
-    AuthFailed { reason: String, detail: String },
-    OAuthCodeReceived { user_code: String, verification_uri: String, expires_in: Duration },
-    OAuthTokenReceived { token: String, scopes: Vec<String> },
+    AuthSucceeded {
+        info: UserInfo,
+    },
+    AuthFailed {
+        reason: String,
+        detail: String,
+    },
+    OAuthCodeReceived {
+        user_code: String,
+        verification_uri: String,
+        expires_in: Duration,
+    },
+    OAuthTokenReceived {
+        token: String,
+        scopes: Vec<String>,
+    },
     OAuthTimeout,
     LoggedOut,
 
-    ReposDiscovered { source: RepoSource, count: usize },
-    DiscoveryFailed { error: String },
+    ReposDiscovered {
+        source: RepoSource,
+        count: usize,
+    },
+    DiscoveryFailed {
+        error: String,
+    },
 
-    SyncCloneStarted { job_id: JobId, repo_full_name: String },
-    SyncCloneProgress { job_id: JobId, repo_full_name: String, bytes: u64, total: u64 },
-    SyncCloneCompleted { job_id: JobId, repo_full_name: String, size_bytes: u64, duration: Duration },
-    SyncFetchStarted { job_id: JobId, repo_full_name: String },
-    SyncFetchProgress { job_id: JobId, repo_full_name: String, bytes: u64 },
-    SyncFetchCompleted { job_id: JobId, repo_full_name: String, new_commits: u32, bytes_fetched: u64, duration: Duration },
-    SyncRepoFailed { job_id: JobId, repo_full_name: String, error: String },
-    SyncRepoUpToDate { job_id: JobId, repo_full_name: String },
+    SyncCloneStarted {
+        job_id: JobId,
+        repo_full_name: String,
+    },
+    SyncCloneProgress {
+        job_id: JobId,
+        repo_full_name: String,
+        bytes: u64,
+        total: u64,
+    },
+    SyncCloneCompleted {
+        job_id: JobId,
+        repo_full_name: String,
+        size_bytes: u64,
+        duration: Duration,
+    },
+    SyncFetchStarted {
+        job_id: JobId,
+        repo_full_name: String,
+    },
+    SyncFetchProgress {
+        job_id: JobId,
+        repo_full_name: String,
+        bytes: u64,
+    },
+    SyncFetchCompleted {
+        job_id: JobId,
+        repo_full_name: String,
+        new_commits: u32,
+        bytes_fetched: u64,
+        duration: Duration,
+    },
+    SyncRepoFailed {
+        job_id: JobId,
+        repo_full_name: String,
+        error: String,
+    },
+    SyncRepoUpToDate {
+        job_id: JobId,
+        repo_full_name: String,
+    },
 
-    SyncAllCompleted { summary: SyncSummary },
+    SyncAllCompleted {
+        summary: SyncSummary,
+    },
     SyncPaused,
     SyncResumed,
-    SyncCancelled { summary: PartialSyncSummary },
-    SyncProgressUpdated { progress: OverallProgress },
+    SyncCancelled {
+        summary: PartialSyncSummary,
+    },
+    SyncProgressUpdated {
+        progress: OverallProgress,
+    },
 
     StatsRefreshed,
-    ReposLoaded { entries: Vec<RepoEntry> },
+    ReposLoaded {
+        entries: Vec<RepoEntry>,
+    },
     DashboardStatsUpdated {
         stats: crate::DashboardStats,
         attention: Vec<crate::AttentionItem>,
     },
     Tick,
     WelcomeAdvanced,
-    FatalError { message: String },
+    FatalError {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Effect {
-    AuthenticatePat { token: String },
-    StartOAuthDeviceFlow { client_id: String, scopes: Vec<String> },
-    PollOAuthToken { client_id: String, device_code: String, interval: Duration },
+    AuthenticatePat {
+        token: String,
+    },
+    StartOAuthDeviceFlow {
+        client_id: String,
+        scopes: Vec<String>,
+    },
+    PollOAuthToken {
+        client_id: String,
+        device_code: String,
+        interval: Duration,
+    },
     CancelOAuth,
-    CompleteOAuthWithToken { token: String },
+    CompleteOAuthWithToken {
+        token: String,
+    },
     LoadStoredCredentials,
     Logout,
 
-    DiscoverRepos { source: RepoSource },
-    PersistRepoSelection { github_ids: Vec<i64>, selected: bool },
+    DiscoverRepos {
+        source: RepoSource,
+    },
+    PersistRepoSelection {
+        github_ids: Vec<i64>,
+        selected: bool,
+    },
     LoadReposFromDb,
 
-    StartSync { repos: Vec<RepoEntry>, base_path: PathBuf, concurrency: usize },
-    CloneSingle { repo: RepoEntry, base_path: PathBuf },
-    SyncSingle { repo: RepoEntry, local_path: PathBuf },
+    StartSync {
+        repos: Vec<RepoEntry>,
+        base_path: PathBuf,
+        concurrency: usize,
+    },
+    CloneSingle {
+        repo: RepoEntry,
+        base_path: PathBuf,
+    },
+    SyncSingle {
+        repo: RepoEntry,
+        local_path: PathBuf,
+    },
     PauseSync,
     ResumeSync,
     CancelSync,
 
     RefreshDashboardStats,
 
-    RecordSyncRun { run_id: Option<i64>, summary: SyncSummary, options_json: Option<String> },
-    ExportRun { run_id: i64, format: ExportFormat, path: PathBuf },
+    RecordSyncRun {
+        run_id: Option<i64>,
+        summary: SyncSummary,
+        options_json: Option<String>,
+    },
+    ExportRun {
+        run_id: i64,
+        format: ExportFormat,
+        path: PathBuf,
+    },
 
-    SaveSetting { key: String, value: String },
+    SaveSetting {
+        key: String,
+        value: String,
+    },
     TestConnection,
 
-    PersistRepos { entries: Vec<RepoEntry> },
-    MarkReposDeleted { github_ids: Vec<i64> },
+    PersistRepos {
+        entries: Vec<RepoEntry>,
+    },
+    MarkReposDeleted {
+        github_ids: Vec<i64>,
+    },
 
-    OpenUrl { url: String },
-    CopyToClipboard { text: String },
+    OpenUrl {
+        url: String,
+    },
+    CopyToClipboard {
+        text: String,
+    },
 
     None,
 }
@@ -211,8 +316,16 @@ impl EventBus {
         let (progress_tx, progress_rx) = mpsc::unbounded_channel();
         let (cancel_tx, cancel_rx) = watch::channel(false);
 
-        let handle = EventBusHandle { app_rx, progress_rx, cancel_rx };
-        let bus = Self { app_tx, progress_tx, cancel_tx };
+        let handle = EventBusHandle {
+            app_rx,
+            progress_rx,
+            cancel_rx,
+        };
+        let bus = Self {
+            app_tx,
+            progress_tx,
+            cancel_tx,
+        };
         (bus, handle)
     }
 }
